@@ -421,11 +421,8 @@ TEMPLATE_FILE="/opt/secure-pods/${TEMPLATE}.yaml"
   exit 1
 }
 
-echo -e "${CYAN}[envpod]${NC} Initialising pod '${BOLD}${POD_NAME}${NC}' with template '${TEMPLATE}'..."
-envpod init "${POD_NAME}" -c "${TEMPLATE_FILE}" || true
-
-echo -e "${CYAN}[envpod]${NC} Launching: $*"
-envpod run "${POD_NAME}" "$@"
+sudo envpod init "${POD_NAME}" -c "${TEMPLATE_FILE}" || true
+sudo envpod run "${POD_NAME}" -- "$@"
 LAUNCHER
 
   chmod +x /usr/local/bin/agh-secure-pod-launch
@@ -452,10 +449,10 @@ show_summary() {
   echo ""
   echo -e "${BOLD}Quick-start examples:${NC}"
   echo ""
-  echo -e "  ${CYAN}# Check GPU${NC}"
-  echo -e "  nvidia-smi"
+  echo -e "  ${CYAN}# Verify GPU is visible inside a pod${NC}"
+  echo -e "  agh-secure-pod-launch gpu-check gpu-ml-training nvidia-smi"
   echo ""
-  echo -e "  ${CYAN}# Run a Python ML training script in a secure GPU pod${NC}"
+  echo -e "  ${CYAN}# Run a Python ML training script${NC}"
   echo -e "  agh-secure-pod-launch my-training gpu-ml-training python3 train.py"
   echo ""
   echo -e "  ${CYAN}# Run an LLM inference server (large VRAM + 24h budget)${NC}"
@@ -464,11 +461,14 @@ show_summary() {
   echo -e "  ${CYAN}# Launch an agent workspace (can reach GitHub, PyPI, Anthropic API)${NC}"
   echo -e "  agh-secure-pod-launch my-agent agent-workspace bash"
   echo ""
-  echo -e "  ${CYAN}# List all available pod templates${NC}"
-  echo -e "  ls ${SECURE_PODS_DIR}/"
+  echo -e "  ${CYAN}# Launch a GPU desktop session${NC}"
+  echo -e "  agh-secure-pod-launch my-desktop gpu-desktop bash"
   echo ""
-  echo -e "  ${CYAN}# Show envpod help${NC}"
-  echo -e "  envpod --help"
+  echo -e "  ${CYAN}# Open an interactive shell in any pod${NC}"
+  echo -e "  agh-secure-pod-launch my-session <template> bash"
+  echo ""
+  echo -e "  ${CYAN}# List available templates${NC}"
+  echo -e "  ls ${SECURE_PODS_DIR}/"
   echo ""
 
   if ! nvidia-smi &>/dev/null; then
