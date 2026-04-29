@@ -2,7 +2,7 @@
 # AGH Secure Pods - Shadeform GPU Setup Script
 #
 # One-line install:
-#   wget -qO setup.sh https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/install_gpu_drivers.sh && sudo bash setup.sh
+#   wget -qO install_drivers.sh https://raw.githubusercontent.com/niksresearch/agh-installations/main/install_gpu_drivers.sh && sudo bash setup.sh
 #
 set -euo pipefail
 
