@@ -134,7 +134,7 @@ blacklist_nouveau() {
 blacklist nouveau
 options nouveau modeset=0
 EOF
-  update-initramfs -u -q
+  update-initramfs -u
   success "nouveau blacklisted."
 }
 
