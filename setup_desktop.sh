@@ -162,16 +162,25 @@ TUNNEL_LOG="/tmp/cloudflared-tunnel.log"
 cloudflared tunnel --url "http://localhost:${NOVNC_PORT}" > "${TUNNEL_LOG}" 2>&1 &
 TUNNEL_PID=$!
 
-info "Waiting for tunnel URL (up to 30s)..."
+info "Waiting for tunnel URL (up to 60s)..."
 PUBLIC_URL=""
-for i in $(seq 1 30); do
+for i in $(seq 1 60); do
   PUBLIC_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' "${TUNNEL_LOG}" 2>/dev/null | head -1)
-  [[ -n "$PUBLIC_URL" ]] && break
+  if [[ -n "$PUBLIC_URL" ]]; then
+    echo ""
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}${GREEN}  PUBLIC URL READY:${NC}"
+    echo -e "${BOLD}${GREEN}  ${PUBLIC_URL}/vnc.html${NC}"
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    break
+  fi
   sleep 1
 done
 
 # ── Done ─────────────────────────────────────────────────────────────────────
-echo ""
+SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || echo "unknown")
+
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BOLD}${GREEN}║              Virtual Desktop Ready!                      ║${NC}"
 echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
@@ -182,17 +191,15 @@ echo -e "  ${GREEN}•${NC} Blender"
 echo -e "  ${GREEN}•${NC} WhisperX  (activate: source /opt/whisperx-env/bin/activate)"
 echo ""
 echo -e "${BOLD}Access:${NC}"
-echo -e "  ${CYAN}Local (SSH tunnel):${NC}  http://localhost:${NOVNC_PORT}/vnc.html"
 if [[ -n "$PUBLIC_URL" ]]; then
-  echo -e "  ${GREEN}${BOLD}Public URL:${NC}          ${PUBLIC_URL}/vnc.html"
-  echo ""
-  echo -e "${YELLOW}Note:${NC} Public URL is temporary. Restarts when this session ends."
-  echo -e "      Run: ${CYAN}cloudflared tunnel --url http://localhost:${NOVNC_PORT}${NC} to regenerate."
+  echo -e "  ${GREEN}${BOLD}Public URL:${NC}   ${PUBLIC_URL}/vnc.html"
+  echo -e "  ${YELLOW}Note:${NC} URL is temporary — regenerate: cloudflared tunnel --url http://localhost:${NOVNC_PORT}"
 else
-  warn "Tunnel URL not captured. Check: tail ${TUNNEL_LOG}"
-  echo -e "  Run manually: ${CYAN}cloudflared tunnel --url http://localhost:${NOVNC_PORT}${NC}"
+  warn "Tunnel URL not captured. Run manually:"
+  echo -e "  cloudflared tunnel --url http://localhost:${NOVNC_PORT}"
+  echo -e "  Then open the printed URL + /vnc.html"
 fi
 echo ""
-echo -e "${BOLD}SSH tunnel (if preferred):${NC}"
-echo -e "  ${CYAN}ssh -i your-key.pem -N -L ${NOVNC_PORT}:127.0.0.1:${NOVNC_PORT} shadeform@$(curl -s ifconfig.me 2>/dev/null)${NC}"
+echo -e "  ${CYAN}SSH tunnel:${NC}   ssh -i your-key.pem -N -L ${NOVNC_PORT}:127.0.0.1:${NOVNC_PORT} shadeform@${SERVER_IP}"
+echo -e "  ${CYAN}Local URL:${NC}    http://localhost:${NOVNC_PORT}/vnc.html"
 echo ""
