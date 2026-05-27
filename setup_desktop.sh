@@ -141,21 +141,27 @@ pkill x11vnc  2>/dev/null || true
 pkill websockify 2>/dev/null || true
 sleep 1
 
-# Store VNC password inside pod (x11vnc reads this at startup)
-nsenter -t "${POD_PID}" -m -u -i -n -p -- \
+# Store VNC password inside pod's mount namespace
+nsenter -t "${POD_PID}" -m -- \
   x11vnc -storepasswd "${VNC_PASS}" /etc/x11vnc.pass
 
+# Xvfb + XFCE: run inside full pod namespace
 nsenter -t "${POD_PID}" -m -u -i -n -p -- bash -c "
 Xvfb ${DISPLAY_NUM} -screen 0 1920x1080x24 &
 sleep 2
 DISPLAY=${DISPLAY_NUM} startxfce4 &
-sleep 3
-x11vnc -display ${DISPLAY_NUM} -forever -rfbauth /etc/x11vnc.pass \
-  -listen 0.0.0.0 -rfbport ${VNC_PORT} \
-  -compress_level 6 -quality 8 &
-websockify --web /usr/share/novnc/ ${NOVNC_PORT} 127.0.0.1:${VNC_PORT} &
 echo 'Display started'
 "
+sleep 5
+
+# x11vnc: mount namespace only (finds Xvfb socket), stays on HOST network so websockify can reach it
+nsenter -t "${POD_PID}" -m -- \
+  x11vnc -display ${DISPLAY_NUM} -forever -rfbauth /etc/x11vnc.pass \
+  -listen 0.0.0.0 -rfbport ${VNC_PORT} &
+sleep 2
+
+# websockify: runs on HOST network directly (connects to host's VNC port)
+websockify --web /usr/share/novnc/ ${NOVNC_PORT} 127.0.0.1:${VNC_PORT} &
 sleep 3
 
 # Remove DNAT rule that blocks localhost:6080 reaching websockify
