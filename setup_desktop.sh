@@ -41,6 +41,30 @@ banner() {
 banner
 info "Host: $(hostname)  |  Time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
+# ── Password prompt ───────────────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}Set a password for the virtual desktop:${NC}"
+echo -e "${CYAN}(Minimum 6 characters — you'll enter this when opening the desktop URL)${NC}"
+echo ""
+VNC_PASS=""
+while true; do
+  read -rsp "$(echo -e "${BOLD}Password:${NC} ")" VNC_PASS
+  echo ""
+  if [[ ${#VNC_PASS} -lt 6 ]]; then
+    warn "Password must be at least 6 characters. Try again."
+    continue
+  fi
+  read -rsp "$(echo -e "${BOLD}Confirm password:${NC} ")" VNC_PASS2
+  echo ""
+  if [[ "$VNC_PASS" == "$VNC_PASS2" ]]; then
+    break
+  else
+    warn "Passwords do not match. Try again."
+  fi
+done
+success "Password accepted."
+echo ""
+
 # ── Step 1: Fix time ──────────────────────────────────────────────────────────
 step 1 "Fixing system time"
 CURRENT_HOUR=$(date +%H)
@@ -117,12 +141,18 @@ pkill x11vnc  2>/dev/null || true
 pkill websockify 2>/dev/null || true
 sleep 1
 
+# Store VNC password inside pod (x11vnc reads this at startup)
+nsenter -t "${POD_PID}" -m -u -i -n -p -- \
+  x11vnc -storepasswd "${VNC_PASS}" /etc/x11vnc.pass
+
 nsenter -t "${POD_PID}" -m -u -i -n -p -- bash -c "
 Xvfb ${DISPLAY_NUM} -screen 0 1920x1080x24 &
 sleep 2
 DISPLAY=${DISPLAY_NUM} startxfce4 &
 sleep 3
-x11vnc -display ${DISPLAY_NUM} -forever -nopw -listen 0.0.0.0 -rfbport ${VNC_PORT} &
+x11vnc -display ${DISPLAY_NUM} -forever -rfbauth /etc/x11vnc.pass \
+  -listen 0.0.0.0 -rfbport ${VNC_PORT} \
+  -compress_level 6 -quality 8 &
 websockify --web /usr/share/novnc/ ${NOVNC_PORT} 127.0.0.1:${VNC_PORT} &
 echo 'Display started'
 "
@@ -165,7 +195,7 @@ TUNNEL_PID=$!
 info "Waiting for tunnel URL (up to 60s)..."
 PUBLIC_URL=""
 for i in $(seq 1 60); do
-  PUBLIC_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' "${TUNNEL_LOG}" 2>/dev/null | head -1)
+  PUBLIC_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' "${TUNNEL_LOG}" 2>/dev/null | head -1 || true)
   if [[ -n "$PUBLIC_URL" ]]; then
     echo ""
     echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -193,6 +223,7 @@ echo ""
 echo -e "${BOLD}Access:${NC}"
 if [[ -n "$PUBLIC_URL" ]]; then
   echo -e "  ${GREEN}${BOLD}Public URL:${NC}   ${PUBLIC_URL}/vnc.html"
+  echo -e "  ${YELLOW}Password:${NC}     Use the password you set during setup"
   echo -e "  ${YELLOW}Note:${NC} URL is temporary — regenerate: cloudflared tunnel --url http://localhost:${NOVNC_PORT}"
 else
   warn "Tunnel URL not captured. Run manually:"
