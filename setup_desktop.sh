@@ -42,28 +42,32 @@ banner
 info "Host: $(hostname)  |  Time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
 # ── Password prompt ───────────────────────────────────────────────────────────
-echo ""
-echo -e "${BOLD}Set a password for the virtual desktop:${NC}"
-echo -e "${CYAN}(Minimum 6 characters — you'll enter this when opening the desktop URL)${NC}"
-echo ""
-VNC_PASS=""
-while true; do
-  read -rsp "$(echo -e "${BOLD}Password:${NC} ")" VNC_PASS
+# VNC_PASS can be pre-set by a parent script (e.g. setup_creative_suite.sh)
+if [[ -z "${VNC_PASS:-}" ]]; then
   echo ""
-  if [[ ${#VNC_PASS} -lt 6 ]]; then
-    warn "Password must be at least 6 characters. Try again."
-    continue
-  fi
-  read -rsp "$(echo -e "${BOLD}Confirm password:${NC} ")" VNC_PASS2
+  echo -e "${BOLD}Set a password for the virtual desktop:${NC}"
+  echo -e "${CYAN}(Minimum 6 characters — you'll enter this when opening the desktop URL)${NC}"
   echo ""
-  if [[ "$VNC_PASS" == "$VNC_PASS2" ]]; then
-    break
-  else
-    warn "Passwords do not match. Try again."
-  fi
-done
-success "Password accepted."
-echo ""
+  while true; do
+    read -rsp "$(echo -e "${BOLD}Password:${NC} ")" VNC_PASS
+    echo ""
+    if [[ ${#VNC_PASS} -lt 6 ]]; then
+      warn "Password must be at least 6 characters. Try again."
+      continue
+    fi
+    read -rsp "$(echo -e "${BOLD}Confirm password:${NC} ")" VNC_PASS2
+    echo ""
+    if [[ "$VNC_PASS" == "$VNC_PASS2" ]]; then
+      break
+    else
+      warn "Passwords do not match. Try again."
+    fi
+  done
+  success "Password accepted."
+  echo ""
+else
+  success "Using password from parent script."
+fi
 
 # ── Step 1: Fix time ──────────────────────────────────────────────────────────
 step 1 "Fixing system time"
