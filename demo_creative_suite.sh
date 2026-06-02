@@ -46,7 +46,7 @@ if [[ -d /opt/Wan2.1 ]] && [[ -d /opt/models/wan21 ]]; then
   info "Installing missing dependencies..."
   nsenter -t "${POD_PID}" -m -- bash -c "
 source /opt/wan21-env/bin/activate
-pip install --quiet easydict
+pip install --quiet easydict diffusers transformers accelerate huggingface_hub
 "
   nsenter -t "${POD_PID}" -m -- bash -c "
 set -e
@@ -70,105 +70,83 @@ fi
 # ── Step 2: 3D Animation via Blender (headless render) ───────────────────────
 step "Step 2/3: Rendering 3D animation with Blender"
 
-# Write Blender scene script INSIDE pod's mount namespace, then run blender
-nsenter -t "${POD_PID}" -m -- bash -c 'cat > /tmp/blender_demo_scene.py << '"'"'BLENDER_SCRIPT'"'"'
-import bpy
-import math
+# Write script to host temp file (no quoting issues), encode as base64, decode inside pod
+cat > /tmp/blender_host_scene.py << 'PYEOF'
+import bpy, math
 
-# Clear default scene
-bpy.ops.object.select_all(action='SELECT')
+bpy.ops.object.select_all(action="SELECT")
 bpy.ops.object.delete()
 
-# ── Camera ──
 bpy.ops.object.camera_add(location=(0, -8, 3))
 cam = bpy.context.object
 cam.rotation_euler = (math.radians(70), 0, 0)
 bpy.context.scene.camera = cam
 
-# ── Main sphere (glowing) ──
 bpy.ops.mesh.primitive_uv_sphere_add(radius=1.5, location=(0, 0, 0))
 sphere = bpy.context.object
-sphere.name = "CoreSphere"
-
-mat = bpy.data.materials.new(name="GlowMaterial")
+mat = bpy.data.materials.new(name="GlowMat")
 mat.use_nodes = True
 nodes = mat.node_tree.nodes
 nodes.clear()
-
-emission = nodes.new('ShaderNodeEmission')
-emission.inputs['Color'].default_value = (0.2, 0.6, 1.0, 1.0)
-emission.inputs['Strength'].default_value = 5.0
-
-output = nodes.new('ShaderNodeOutputMaterial')
-mat.node_tree.links.new(emission.outputs['Emission'], output.inputs['Surface'])
+em = nodes.new("ShaderNodeEmission")
+em.inputs["Color"].default_value = (0.2, 0.6, 1.0, 1.0)
+em.inputs["Strength"].default_value = 5.0
+out = nodes.new("ShaderNodeOutputMaterial")
+mat.node_tree.links.new(em.outputs["Emission"], out.inputs["Surface"])
 sphere.data.materials.append(mat)
-
-# Animate rotation
 sphere.rotation_euler = (0, 0, 0)
 sphere.keyframe_insert(data_path="rotation_euler", frame=1)
 sphere.rotation_euler = (0, 0, math.radians(360))
 sphere.keyframe_insert(data_path="rotation_euler", frame=120)
 
-# ── Orbital rings ──
-for i, (scale, color) in enumerate([
-    (2.2, (0.0, 0.8, 1.0, 1.0)),
-    (2.8, (0.5, 0.2, 1.0, 1.0)),
-    (3.4, (1.0, 0.4, 0.0, 1.0)),
-]):
-    bpy.ops.mesh.primitive_torus_add(
-        major_radius=scale, minor_radius=0.05,
-        location=(0, 0, 0),
-        rotation=(math.radians(90 * (i % 2)), math.radians(30 * i), 0)
-    )
-    ring = bpy.context.object
-    ring.name = f"Ring_{i}"
+for i, (scale, col) in enumerate([(2.2,(0.0,0.8,1.0,1.0)),(2.8,(0.5,0.2,1.0,1.0)),(3.4,(1.0,0.4,0.0,1.0))]):
+    bpy.ops.mesh.primitive_torus_add(major_radius=scale, minor_radius=0.05,
+        location=(0,0,0), rotation=(math.radians(90*(i%2)), math.radians(30*i), 0))
+    r = bpy.context.object
+    rm = bpy.data.materials.new(name=f"RingMat{i}")
+    rm.use_nodes = True
+    rn = rm.node_tree.nodes; rn.clear()
+    re = rn.new("ShaderNodeEmission"); re.inputs["Color"].default_value = col; re.inputs["Strength"].default_value = 3.0
+    ro = rn.new("ShaderNodeOutputMaterial")
+    rm.node_tree.links.new(re.outputs["Emission"], ro.inputs["Surface"])
+    r.data.materials.append(rm)
+    r.keyframe_insert(data_path="rotation_euler", frame=1)
+    r.rotation_euler[2] += math.radians(360)
+    r.keyframe_insert(data_path="rotation_euler", frame=120)
 
-    ring_mat = bpy.data.materials.new(name=f"RingMat_{i}")
-    ring_mat.use_nodes = True
-    ring_nodes = ring_mat.node_tree.nodes
-    ring_nodes.clear()
-    ring_emission = ring_nodes.new('ShaderNodeEmission')
-    ring_emission.inputs['Color'].default_value = color
-    ring_emission.inputs['Strength'].default_value = 3.0
-    ring_output = ring_nodes.new('ShaderNodeOutputMaterial')
-    ring_mat.node_tree.links.new(ring_emission.outputs['Emission'], ring_output.inputs['Surface'])
-    ring.data.materials.append(ring_mat)
-
-    ring.keyframe_insert(data_path="rotation_euler", frame=1)
-    ring.rotation_euler[2] += math.radians(360)
-    ring.keyframe_insert(data_path="rotation_euler", frame=120)
-
-# ── World (dark background) ──
 world = bpy.context.scene.world
 world.use_nodes = True
-bg = world.node_tree.nodes.get('Background')
+bg = world.node_tree.nodes.get("Background")
 if bg:
-    bg.inputs['Color'].default_value = (0.0, 0.0, 0.05, 1.0)
-    bg.inputs['Strength'].default_value = 1.0
+    bg.inputs["Color"].default_value = (0.0, 0.0, 0.05, 1.0)
 
-# ── Render settings ──
 scene = bpy.context.scene
 scene.frame_start = 1
-scene.frame_end = 120          # 5 seconds at 24fps
+scene.frame_end = 120
 scene.render.fps = 24
 scene.render.resolution_x = 1280
 scene.render.resolution_y = 720
-scene.render.image_settings.file_format = 'FFMPEG'
-scene.render.ffmpeg.format = 'MPEG4'
-scene.render.ffmpeg.codec = 'H264'
-scene.render.filepath = '/tmp/agh-demo/blender_animation.mp4'
-
-# Use EEVEE for fast GPU render
-scene.render.engine = 'BLENDER_EEVEE_NEXT'
+scene.render.image_settings.file_format = "FFMPEG"
+scene.render.ffmpeg.format = "MPEG4"
+scene.render.ffmpeg.codec = "H264"
+scene.render.filepath = "/tmp/agh-demo/blender_animation.mp4"
+scene.render.engine = "BLENDER_EEVEE"
 eevee = scene.eevee
-eevee.use_bloom = True
-eevee.bloom_intensity = 0.5
+if hasattr(eevee, "use_bloom"):
+    eevee.use_bloom = True
+    eevee.bloom_intensity = 0.5
 
 bpy.ops.render.render(animation=True)
 print("Blender render complete.")
-BLENDER_SCRIPT
-blender --background --python /tmp/blender_demo_scene.py 2>&1 | tail -5
-' && success "Blender animation saved: ${OUTPUT_DIR}/blender_animation.mp4" \
+PYEOF
+
+# Encode on host, decode inside pod's mount namespace — avoids all quoting issues
+SCENE_B64=$(base64 -w0 /tmp/blender_host_scene.py)
+
+nsenter -t "${POD_PID}" -m -- bash -c "
+echo '${SCENE_B64}' | base64 -d > /tmp/blender_demo_scene.py
+blender --background --python /tmp/blender_demo_scene.py 2>&1 | tail -10
+" && success "Blender animation saved: ${OUTPUT_DIR}/blender_animation.mp4" \
   || warn "Blender render failed. Check blender is installed."
 
 # ── Step 3: Assemble final demo reel with FFmpeg ──────────────────────────────

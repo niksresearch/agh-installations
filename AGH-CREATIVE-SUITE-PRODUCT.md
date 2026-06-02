@@ -46,25 +46,27 @@ Full XFCE Linux desktop in your browser. No VNC client needed — just open a UR
 
 ### Always Installed (Every Package)
 
-| App | What It Does |
-|---|---|
-| **GIMP** | Full image editor (Photoshop equivalent) |
-| **Krita** | Digital painting and illustration |
-| **Kdenlive** | Professional video editor (non-linear) |
-| **Audacity** | Audio recording and editing |
-| **Inkscape** | Vector graphics (Illustrator equivalent) |
-| **ComfyUI** | AI workflow hub — runs image, video, and audio models through a visual node editor |
-| **FFmpeg** | Video/audio conversion and processing |
-| **Blender** | 3D modeling, animation, rendering |
-| **WhisperX** | Speech-to-text transcription (any language) |
+| App | Port | What It Does |
+|---|---|---|
+| **Fooocus** | 7865 | Midjourney-style image generation — type prompt, get image, zero config |
+| **ComfyUI** | 8188 | Advanced AI workflow hub — node editor for image, video, and audio pipelines |
+| **Chrome** | — | Pre-installed browser for accessing all web UIs from the desktop |
+| **GIMP** | — | Full image editor (Photoshop equivalent) |
+| **Krita** | — | Digital painting and illustration |
+| **Kdenlive** | — | Professional video editor (non-linear) |
+| **Audacity** | — | Audio recording and editing |
+| **Inkscape** | — | Vector graphics (Illustrator equivalent) |
+| **FFmpeg** | — | Video/audio conversion and processing |
+| **Blender** | — | 3D modeling, animation, rendering |
+| **WhisperX** | — | Speech-to-text transcription (any language) |
 
 ### Optional Packages
 
 #### Starter Package (~40GB, ~20 min)
 Best for image generation and short video work.
-- **FLUX model** — state-of-the-art image generation (better than Midjourney for many use cases)
-- **Wan2.1** — AI video generation, up to 2+ minutes, no watermarks
-- **Real-ESRGAN + RIFE** — AI upscaling (4x resolution) + frame interpolation (smooth 24fps → 60fps)
+- **FLUX model** (via ComfyUI) — state-of-the-art image generation, better than Midjourney for many use cases
+- **Wan2.1** (port 7870, browser UI) — AI video generation up to 2+ minutes, no watermarks, no time limits
+- **Real-ESRGAN + RIFE** — AI upscaling (4x resolution) + frame interpolation (24fps → 60fps)
 
 #### Creator Package (~140GB, ~60 min)
 Everything in Starter, plus:
@@ -85,29 +87,42 @@ Everything, including:
 
 ## Access Methods
 
-### Public URL (Instant Share)
-After setup, a public `https://xxxx.trycloudflare.com/vnc.html` URL is printed. Share with your team. Protected by password set during setup.
+### Inside the Desktop (Zero Setup)
+Open Chrome in the XFCE desktop — it opens the **AGH Portal** automatically at `http://localhost:9080`. Every service is one click away. No SSH, no configuration.
 
-### SSH Tunnel (Private, Faster)
-```bash
-ssh -L 6080:127.0.0.1:6080 \
-    -L 8188:127.0.0.1:8188 \
-    -L 7860:127.0.0.1:7860 \
-    shadeform@<YOUR_SERVER_IP>
+### Public URLs (Shareable, No SSH)
+After setup, each service gets its own public URL printed to the terminal:
+
 ```
-Then open `http://localhost:6080/vnc.html`
+Portal:           https://xxxx.trycloudflare.com   ← start here
+Desktop:          https://yyyy.trycloudflare.com/vnc.html
+Fooocus (images): https://zzzz.trycloudflare.com
+Wan2.1 (video):   https://aaaa.trycloudflare.com
+ComfyUI:          https://bbbb.trycloudflare.com
+```
+
+Share any URL directly. The portal page also lists all public URLs so you can bookmark one link and access everything.
+
+### SSH Tunnel (Optional, Private)
+Only needed if you want private access without public URLs:
+```bash
+ssh -L 9080:127.0.0.1:9080 shadeform@<YOUR_SERVER_IP>
+```
+Then open `http://localhost:9080` — the portal links to everything else.
 
 ---
 
 ## Service Ports
 
-| Service | Port | URL |
-|---|---|---|
-| Desktop (noVNC) | 6080 | http://localhost:6080/vnc.html |
-| ComfyUI | 8188 | http://localhost:8188 |
-| Stable Diffusion A1111 | 7860 | http://localhost:7860 |
-| JupyterLab | 8888 | http://localhost:8888 |
-| VS Code | 8080 | http://localhost:8080 |
+| Service | Port | URL | Notes |
+|---|---|---|---|
+| Desktop (XFCE via noVNC) | 6080 | http://localhost:6080/vnc.html | Full Linux desktop |
+| **Fooocus** | **7865** | **http://localhost:7865** | **Midjourney-style — always installed** |
+| **Wan2.1 Video** | **7870** | **http://localhost:7870** | **AI video generator — no time limits** |
+| ComfyUI | 8188 | http://localhost:8188 | Advanced AI workflows |
+| Stable Diffusion A1111 | 7860 | http://localhost:7860 | Optional (Full Suite) |
+| JupyterLab | 8888 | http://localhost:8888 | Optional (Dev Tools) |
+| VS Code | 8080 | http://localhost:8080 | Optional (Dev Tools) |
 
 ---
 

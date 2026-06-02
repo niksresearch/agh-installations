@@ -418,24 +418,28 @@ dirs via `clone_host`.
 | **Full Suite** | Everything including A1111, LTX-Video, CogVideoX, VS Code | ~170GB | ~90min |
 | **Custom** | User picks individual apps | varies | varies |
 
-Always installed in all bundles: GIMP, Krita, Kdenlive, Audacity, Inkscape, ComfyUI, FFmpeg, Blender, WhisperX.
+Always installed in all bundles: **Fooocus** (Midjourney-style UI), **Chrome**, GIMP, Krita, Kdenlive, Audacity, Inkscape, ComfyUI, FFmpeg, Blender, WhisperX.
 
-**Service ports (SSH tunnel all at once):**
+**No SSH needed.** Setup prints public URLs for every service. Inside the desktop, Chrome opens the portal automatically.
+
+**AGH Portal** (`http://localhost:9080` or public URL) — one page, all services, clickable links.
+
+| Port | Service | Notes |
+|---|---|---|
+| 9080 | **AGH Portal** | Start here — links to everything |
+| 6080 | Desktop (noVNC) | Full XFCE desktop |
+| 7865 | Fooocus | Midjourney-style image gen |
+| 7870 | Wan2.1 Video | AI video generator, no time limits |
+| 8188 | ComfyUI | Advanced AI workflows |
+| 7860 | Stable Diffusion A1111 | Full Suite only |
+| 8888 | JupyterLab | Dev Tools only |
+| 8080 | VS Code | Dev Tools only |
+
+**SSH tunnel (optional, private access only):**
 ```bash
-ssh -L 6080:127.0.0.1:6080 \
-    -L 8188:127.0.0.1:8188 \
-    -L 7860:127.0.0.1:7860 \
-    -L 8888:127.0.0.1:8888 \
-    shadeform@<SERVER_IP>
+ssh -L 9080:127.0.0.1:9080 shadeform@<SERVER_IP>
+# then open http://localhost:9080
 ```
-
-| Port | Service |
-|---|---|
-| 6080 | Desktop (noVNC) |
-| 8188 | ComfyUI |
-| 7860 | Stable Diffusion A1111 |
-| 8888 | JupyterLab |
-| 8080 | VS Code |
 
 Product doc: `AGH-CREATIVE-SUITE-PRODUCT.md`
 
