@@ -19,6 +19,8 @@ success() { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 step()    { echo -e "\n${BOLD}${CYAN}══ $* ${NC}"; }
 
+[[ $EUID -eq 0 ]] || { echo -e "${RED}[ERROR]${NC} Run as root: sudo bash $0"; exit 1; }
+
 OUTPUT_DIR="/tmp/agh-demo"
 mkdir -p "${OUTPUT_DIR}/frames"
 
@@ -41,10 +43,15 @@ echo ""
 step "Step 1/3: Generating AI video with Wan2.1 (no time limits)"
 
 if [[ -d /opt/Wan2.1 ]] && [[ -d /opt/models/wan21 ]]; then
+  info "Installing missing dependencies..."
   nsenter -t "${POD_PID}" -m -- bash -c "
 source /opt/wan21-env/bin/activate
+pip install --quiet easydict
+"
+  nsenter -t "${POD_PID}" -m -- bash -c "
+set -e
+source /opt/wan21-env/bin/activate
 cd /opt/Wan2.1
-
 python generate.py \
   --task t2v-14B \
   --size 1280*720 \
@@ -53,8 +60,6 @@ python generate.py \
   --sample_guide_scale 6.0 \
   --prompt \"${VIDEO_PROMPT}\" \
   --save_file ${OUTPUT_DIR}/ai_video.mp4
-
-echo 'Wan2.1 generation complete'
 " && success "AI video saved: ${OUTPUT_DIR}/ai_video.mp4" \
   || warn "Wan2.1 generation failed. Check /opt/models/wan21 exists."
 else
@@ -65,8 +70,8 @@ fi
 # ── Step 2: 3D Animation via Blender (headless render) ───────────────────────
 step "Step 2/3: Rendering 3D animation with Blender"
 
-# Write a minimal Blender Python scene: rotating glowing sphere with particles
-cat > /tmp/blender_demo_scene.py << 'BLENDER_SCRIPT'
+# Write Blender scene script INSIDE pod's mount namespace, then run blender
+nsenter -t "${POD_PID}" -m -- bash -c 'cat > /tmp/blender_demo_scene.py << '"'"'BLENDER_SCRIPT'"'"'
 import bpy
 import math
 
@@ -162,10 +167,8 @@ eevee.bloom_intensity = 0.5
 bpy.ops.render.render(animation=True)
 print("Blender render complete.")
 BLENDER_SCRIPT
-
-nsenter -t "${POD_PID}" -m -- bash -c "
 blender --background --python /tmp/blender_demo_scene.py 2>&1 | tail -5
-" && success "Blender animation saved: ${OUTPUT_DIR}/blender_animation.mp4" \
+' && success "Blender animation saved: ${OUTPUT_DIR}/blender_animation.mp4" \
   || warn "Blender render failed. Check blender is installed."
 
 # ── Step 3: Assemble final demo reel with FFmpeg ──────────────────────────────
