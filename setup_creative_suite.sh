@@ -212,19 +212,34 @@ info "Selected: ${SELECTED_APPS:-core tools only}"
 # ── Install functions ─────────────────────────────────────────────────────────
 
 install_flux() {
-  info "Downloading FLUX.1-dev model (~24GB)..."
+  # FLUX.1-dev is gated (requires HF account + license approval).
+  # FLUX.1-schnell is Apache 2.0 — no auth, no approval, nearly same quality.
+  # Set HF_TOKEN env var before running setup to unlock FLUX.1-dev.
+  if [[ -n "${HF_TOKEN:-}" ]]; then
+    FLUX_REPO="black-forest-labs/FLUX.1-dev"
+    FLUX_FILE="flux1-dev.safetensors"
+    info "Downloading FLUX.1-dev model (~24GB) — using HF_TOKEN..."
+  else
+    FLUX_REPO="black-forest-labs/FLUX.1-schnell"
+    FLUX_FILE="flux1-schnell.safetensors"
+    info "Downloading FLUX.1-schnell model (~24GB, Apache 2.0 — no token needed)..."
+    info "To use FLUX.1-dev (higher quality), set HF_TOKEN and re-run."
+  fi
+
   nsenter -t "${POD_PID}" -m -- bash -c "
 source /opt/comfyui-env/bin/activate
-hf download black-forest-labs/FLUX.1-dev \
-  flux1-dev.safetensors \
-  --local-dir /opt/ComfyUI/models/unet/ \
+${HF_TOKEN:+export HF_TOKEN=${HF_TOKEN}}
+hf download ${FLUX_REPO} \
+  ${FLUX_FILE} \
+  --local-dir /opt/ComfyUI/models/unet/
 hf download comfyanonymous/flux_text_encoders \
   clip_l.safetensors t5xxl_fp8_e4m3fn.safetensors \
-  --local-dir /opt/ComfyUI/models/clip/ \
-hf download black-forest-labs/FLUX.1-dev \
+  --local-dir /opt/ComfyUI/models/clip/
+hf download ${FLUX_REPO} \
   ae.safetensors \
-  --local-dir /opt/ComfyUI/models/vae/ \
-" && success "FLUX model downloaded." || warn "FLUX download failed — retry: hf download black-forest-labs/FLUX.1-dev"
+  --local-dir /opt/ComfyUI/models/vae/
+" && success "FLUX model downloaded (${FLUX_REPO})." \
+  || warn "FLUX download failed. If using dev model, accept license at: https://huggingface.co/${FLUX_REPO}"
 }
 
 install_a1111() {
@@ -616,10 +631,10 @@ python -c \"
 from audiocraft.models import MusicGen
 import torchaudio, sys
 m = MusicGen.get_pretrained('melody')
-m.set_generation_params(duration=int('${DURATION}'))
-audio = m.generate(['${PROMPT}'])[0].cpu()
-torchaudio.save('${OUTPUT}', audio, 32000)
-print('Saved:', '${OUTPUT}')
+m.set_generation_params(duration=int('\${DURATION}'))
+audio = m.generate(['\${PROMPT}'])[0].cpu()
+torchaudio.save('\${OUTPUT}', audio, 32000)
+print('Saved:', '\${OUTPUT}')
 \"
 WEOF
 chmod +x /usr/local/bin/musicgen-generate
