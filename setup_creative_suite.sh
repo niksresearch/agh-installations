@@ -218,15 +218,12 @@ source /opt/comfyui-env/bin/activate
 hf download black-forest-labs/FLUX.1-dev \
   flux1-dev.safetensors \
   --local-dir /opt/ComfyUI/models/unet/ \
-  --local-dir-use-symlinks False
 hf download comfyanonymous/flux_text_encoders \
   clip_l.safetensors t5xxl_fp8_e4m3fn.safetensors \
   --local-dir /opt/ComfyUI/models/clip/ \
-  --local-dir-use-symlinks False
 hf download black-forest-labs/FLUX.1-dev \
   ae.safetensors \
   --local-dir /opt/ComfyUI/models/vae/ \
-  --local-dir-use-symlinks False
 " && success "FLUX model downloaded." || warn "FLUX download failed — retry: hf download black-forest-labs/FLUX.1-dev"
 }
 
@@ -243,7 +240,6 @@ mkdir -p /opt/stable-diffusion-webui/models/Stable-diffusion
 hf download runwayml/stable-diffusion-v1-5 \
   v1-5-pruned-emaonly.safetensors \
   --local-dir /opt/stable-diffusion-webui/models/Stable-diffusion/ \
-  --local-dir-use-symlinks False
 " && success "A1111 installed." || warn "A1111 install failed."
 }
 
@@ -259,7 +255,6 @@ pip install --quiet -r /opt/HunyuanVideo/requirements.txt
 mkdir -p ${MODELS_DIR}/hunyuan
 hf download tencent/HunyuanVideo \
   --local-dir ${MODELS_DIR}/hunyuan \
-  --local-dir-use-symlinks False
 " && success "HunyuanVideo installed." || warn "HunyuanVideo install failed."
 }
 
@@ -281,7 +276,6 @@ pip install flash-attn --no-build-isolation --quiet 2>/dev/null || \
 mkdir -p ${MODELS_DIR}/wan21
 hf download Wan-AI/Wan2.1-T2V-14B \
   --local-dir ${MODELS_DIR}/wan21 \
-  --local-dir-use-symlinks False
 " || { warn "Wan2.1 install failed."; return 1; }
 
   # Step B: patch attention.py — write on host, base64-encode, decode+run inside pod
@@ -412,7 +406,6 @@ pip install --quiet 'ltx-video' diffusers transformers accelerate
 mkdir -p ${MODELS_DIR}/ltx
 hf download Lightricks/LTX-Video \
   --local-dir ${MODELS_DIR}/ltx \
-  --local-dir-use-symlinks False
 " && success "LTX-Video installed." || warn "LTX-Video install failed."
 }
 
@@ -426,7 +419,6 @@ pip install --quiet diffusers transformers accelerate 'imageio[ffmpeg]'
 mkdir -p ${MODELS_DIR}/cogvideo
 hf download THUDM/CogVideoX-5b \
   --local-dir ${MODELS_DIR}/cogvideo \
-  --local-dir-use-symlinks False
 " && success "CogVideoX-5B installed." || warn "CogVideoX install failed."
 }
 
