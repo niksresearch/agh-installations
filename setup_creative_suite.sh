@@ -265,25 +265,27 @@ hf download tencent/HunyuanVideo \
 
 install_wan21() {
   info "Installing Wan2.1 (~14GB)..."
+
+  # Step A: clone, venv, pip, model download
   nsenter -t "${POD_PID}" -m -- bash -c "
 git clone https://github.com/Wan-Video/Wan2.1 /opt/Wan2.1 2>/dev/null || \
   (cd /opt/Wan2.1 && git pull)
 python3 -m venv /opt/wan21-env
 source /opt/wan21-env/bin/activate
 pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install --quiet diffusers transformers accelerate easydict
+pip install --quiet diffusers transformers accelerate easydict gradio
 pip install --quiet -r /opt/Wan2.1/requirements.txt
 pip install --quiet huggingface_hub
 pip install flash-attn --no-build-isolation --quiet 2>/dev/null || \
-  echo '[WARN] flash-attn compile failed — patching to use PyTorch sdp fallback'
+  echo '[WARN] flash-attn compile failed — will patch to sdp fallback'
 mkdir -p ${MODELS_DIR}/wan21
 hf download Wan-AI/Wan2.1-T2V-14B \
   --local-dir ${MODELS_DIR}/wan21 \
   --local-dir-use-symlinks False
+" || { warn "Wan2.1 install failed."; return 1; }
 
-# Patch attention.py to fall back to torch sdp when flash-attn unavailable
-python3 - << 'PYEOF'
-import sys
+  # Step B: patch attention.py — write on host, base64-encode, decode+run inside pod
+  cat > /tmp/wan21_attn_patch.py << 'PYEOF'
 path = '/opt/Wan2.1/wan/modules/attention.py'
 with open(path) as f:
     src = f.read()
@@ -337,29 +339,36 @@ if old in src:
 else:
     print('attention.py already patched or pattern changed')
 PYEOF
+  ATTN_B64=$(base64 -w0 /tmp/wan21_attn_patch.py)
+  nsenter -t "${POD_PID}" -m -- bash -c "
+echo '${ATTN_B64}' | base64 -d > /tmp/wan21_attn_patch.py
+source /opt/wan21-env/bin/activate
+python3 /tmp/wan21_attn_patch.py
+"
 
-# Simple Gradio web UI for Wan2.1 (port 7870)
-pip install --quiet gradio
-cat > /opt/Wan2.1/gradio_app.py << 'GRADEOF'
+  # Step C: write Gradio UI — write on host, base64-encode, decode inside pod
+  cat > /tmp/wan21_gradio_app.py << 'PYEOF'
 import gradio as gr, subprocess, os, time
 
 MODELS_DIR = os.environ.get("AGH_MODELS", "/opt/models")
-TMPDIR = os.environ.get("TMPDIR", "/tmp")
+TMPDIR_DIR = os.environ.get("TMPDIR", "/tmp")
 
 def generate_video(prompt, steps, guidance, width, height):
-    out = f"{TMPDIR}/wan21_{int(time.time())}.mp4"
+    ts = int(time.time())
+    out = os.path.join(TMPDIR_DIR, f"wan21_{ts}.mp4")
+    size = f"{int(width)}*{int(height)}"
     cmd = [
         "python", "generate.py",
         "--task", "t2v-14B",
-        "--size", f"{width}*{height}",
-        "--ckpt_dir", f"{MODELS_DIR}/wan21",
-        "--sample_steps", str(steps),
-        "--sample_guide_scale", str(guidance),
+        "--size", size,
+        "--ckpt_dir", os.path.join(MODELS_DIR, "wan21"),
+        "--sample_steps", str(int(steps)),
+        "--sample_guide_scale", str(float(guidance)),
         "--prompt", prompt,
         "--save_file", out,
     ]
     env = os.environ.copy()
-    env["TMPDIR"] = TMPDIR
+    env["TMPDIR"] = TMPDIR_DIR
     result = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd="/opt/Wan2.1")
     if os.path.exists(out):
         return out, "Generation complete."
@@ -385,8 +394,12 @@ with gr.Blocks(title="Wan2.1 Video Generator", theme=gr.themes.Soft()) as demo:
               outputs=[video_out, status])
 
 demo.launch(server_name="0.0.0.0", server_port=7870, share=False)
-GRADEOF
-" && success "Wan2.1 installed with Gradio UI on port 7870." || warn "Wan2.1 install failed."
+PYEOF
+  GRADIO_B64=$(base64 -w0 /tmp/wan21_gradio_app.py)
+  nsenter -t "${POD_PID}" -m -- bash -c "
+echo '${GRADIO_B64}' | base64 -d > /opt/Wan2.1/gradio_app.py
+"
+  success "Wan2.1 installed with Gradio UI on port 7870."
 }
 
 install_ltx() {
