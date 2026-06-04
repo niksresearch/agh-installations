@@ -267,18 +267,13 @@ install_flux() {
   # Accept at https://huggingface.co/black-forest-labs/FLUX.1-schnell
   # Then get token at https://huggingface.co/settings/tokens
   # Pass as: HF_TOKEN=hf_xxx sudo bash setup_creative_suite.sh
-  if [[ -n "${HF_TOKEN:-}" ]]; then
-    FLUX_REPO="black-forest-labs/FLUX.1-dev"
-    FLUX_FILE="flux1-dev.safetensors"
-    info "Downloading FLUX.1-dev model (~24GB) — using HF_TOKEN..."
-  else
-    FLUX_REPO="black-forest-labs/FLUX.1-schnell"
-    FLUX_FILE="flux1-schnell.safetensors"
-    info "Downloading FLUX.1-schnell model (~24GB)..."
-    warn "FLUX requires license acceptance. If download fails:"
-    warn "  1. Visit https://huggingface.co/black-forest-labs/FLUX.1-schnell"
-    warn "  2. Accept license, get token from https://huggingface.co/settings/tokens"
-    warn "  3. Re-run: HF_TOKEN=hf_xxx sudo bash setup_creative_suite.sh"
+  FLUX_REPO="black-forest-labs/FLUX.1-schnell"
+  FLUX_FILE="flux1-schnell.safetensors"
+  info "Downloading FLUX.1-schnell model (~24GB)..."
+  if [[ -z "${HF_TOKEN:-}" ]]; then
+    warn "No HuggingFace token found. FLUX download will likely fail."
+    warn "Re-run setup to enter your token."
+    return 0
   fi
 
   local TOKEN_ARG=""
