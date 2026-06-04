@@ -1,125 +1,284 @@
 #!/usr/bin/env bash
-# AGH Creative Suite — Demo Video Generator
+# AGH Creative Suite — Promo Video Generator
 #
-# Creates a 60-second demo reel showing:
-#   - AI video generation via Wan2.1 (no time limits)
-#   - 3D animation via Blender (headless render)
-#   - Final edit assembled with FFmpeg
+# Creates AGH's own promotional video using AGH Creative Suite.
+# "We made this promo using the thing we're promoting."
 #
-# Run inside the Shadeform VM after setup_creative_suite.sh completes.
-# Usage: bash demo_creative_suite.sh
+# Segments:
+#   1. Title card
+#   2. AI brand images via Fooocus/diffusers (6 images → slideshow)
+#   3. AGH logo 3D reveal via Blender
+#   4. AI video via Wan2.1 (futuristic workspace)
+#   5. Background music via MusicGen
+#   6. Final assembly via FFmpeg
+#
+# Run in background:
+#   sudo nohup bash demo_creative_suite.sh > /ephemeral/demo.log 2>&1 &
+#   tail -f /ephemeral/demo.log
+#
+# Or foreground:
+#   sudo bash demo_creative_suite.sh
 #
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-info()    { echo -e "${CYAN}[INFO]${NC}  $*"; }
-success() { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-step()    { echo -e "\n${BOLD}${CYAN}══ $* ${NC}"; }
+info()    { echo -e "[$(date '+%H:%M:%S')] ${CYAN}[INFO]${NC}  $*"; }
+success() { echo -e "[$(date '+%H:%M:%S')] ${GREEN}[OK]${NC}    $*"; }
+warn()    { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}[WARN]${NC}  $*"; }
+step()    { echo -e "\n[$(date '+%H:%M:%S')] ${BOLD}${CYAN}══ $* ══${NC}"; }
 
 [[ $EUID -eq 0 ]] || { echo -e "${RED}[ERROR]${NC} Run as root: sudo bash $0"; exit 1; }
 
-OUTPUT_DIR="/tmp/agh-demo"
-mkdir -p "${OUTPUT_DIR}/frames"
+# ── Auto-detect paths ─────────────────────────────────────────────────────────
+[[ -f /etc/profile.d/agh-paths.sh ]] && source /etc/profile.d/agh-paths.sh
+DATA_DIR="${AGH_DATA:-/ephemeral}"
+MODELS_DIR="${AGH_MODELS:-/ephemeral/models}"
+export TMPDIR="${TMPDIR:-${DATA_DIR}/tmp}"
+mkdir -p "${TMPDIR}"
 
-# ── Demo prompt ───────────────────────────────────────────────────────────────
-VIDEO_PROMPT="A cinematic timelapse of a futuristic city at golden hour. Flying vehicles streak across glowing skyscrapers. Camera slowly pulls back to reveal the full skyline. Ultra detailed, photorealistic, smooth motion, 4K quality."
+OUTPUT_DIR="${DATA_DIR}/agh-promo"
+mkdir -p "${OUTPUT_DIR}/images" "${OUTPUT_DIR}/videos"
 
 POD_PID=$(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}' | head -1)
 [[ -n "$POD_PID" ]] || { echo -e "${RED}[ERROR]${NC} Pod not running. Run setup_creative_suite.sh first."; exit 1; }
 
+GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "GPU")
+
+# Detect installed tools
+HAS_WAN21=false;    [[ -d /opt/Wan2.1 && -d "${MODELS_DIR}/wan21" ]] && HAS_WAN21=true
+HAS_MUSICGEN=false; nsenter -t "${POD_PID}" -m -- bash -c "source /opt/audio-env/bin/activate 2>/dev/null && python -c 'import audiocraft' 2>/dev/null" && HAS_MUSICGEN=true || true
+HAS_BLENDER=false;  nsenter -t "${POD_PID}" -m -- bash -c "command -v blender" &>/dev/null && HAS_BLENDER=true || true
+HAS_DIFFUSERS=false; nsenter -t "${POD_PID}" -m -- bash -c "source /opt/comfyui-env/bin/activate 2>/dev/null && python -c 'import diffusers, torch' 2>/dev/null" && HAS_DIFFUSERS=true || true
+
 echo -e "${BOLD}${CYAN}"
-echo "╔══════════════════════════════════════════════════════════╗"
-echo "║        AGH Creative Suite — Demo Video Generator         ║"
-echo "╚══════════════════════════════════════════════════════════╝"
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║        AGH Creative Suite — Promo Video Generator           ║"
+echo "║        Made using the suite it promotes                      ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
-info "Output directory: ${OUTPUT_DIR}"
-info "Prompt: ${VIDEO_PROMPT}"
+info "GPU:        ${GPU_NAME}"
+info "Output:     ${OUTPUT_DIR}"
+info "Blender:    ${HAS_BLENDER} | Wan2.1: ${HAS_WAN21} | MusicGen: ${HAS_MUSICGEN} | Diffusers: ${HAS_DIFFUSERS}"
 echo ""
 
-# ── Step 1: AI Video via Wan2.1 (~30 seconds of generation) ──────────────────
-step "Step 1/3: Generating AI video with Wan2.1 (no time limits)"
+# ── Helper: title/section card via FFmpeg ─────────────────────────────────────
+make_card() {
+  local out="$1" dur="$2" title="$3" subtitle="$4" bg="${5:-0x000a1a}" fg="${6:-white}" accent="${7:-00ccff}"
+  nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error \
+  -f lavfi -i color=c=${bg}:size=1280x720:duration=${dur}:rate=24 \
+  -vf \"drawtext=text='${title}':fontsize=54:fontcolor=${fg}:x=(w-text_w)/2:y=(h-text_h)/2-50:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf,drawtext=text='${subtitle}':fontsize=26:fontcolor=#${accent}:x=(w-text_w)/2:y=(h-text_h)/2+30:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf\" \
+  -c:v libx264 -preset fast -crf 20 '${out}'
+" 2>/dev/null
+}
 
-if [[ -d /opt/Wan2.1 ]] && [[ -d /opt/models/wan21 ]]; then
-  info "Installing missing dependencies..."
+# ── Step 1: Title card ────────────────────────────────────────────────────────
+step "Step 1/6: Title card"
+make_card "${OUTPUT_DIR}/s1_title.mp4" 4 \
+  "AGH Creative Suite" "Your GPU. Your Canvas. No Limits." \
+  "0x000a1a" "white" "00ccff"
+success "Title card done."
+
+# ── Step 2: AI brand images via diffusers ─────────────────────────────────────
+step "Step 2/6: AI brand images"
+
+if [[ "$HAS_DIFFUSERS" == "true" ]]; then
+  cat > /tmp/agh_promo_images.py << 'PYEOF'
+import torch, os, sys
+from diffusers import StableDiffusionPipeline
+
+out_dir = sys.argv[1]
+tmpdir  = os.environ.get("TMPDIR", "/tmp")
+
+# Check if FLUX schnell available, fall back to SD 1.5
+flux_path = "/opt/ComfyUI/models/unet/flux1-schnell.safetensors"
+use_sd15 = not os.path.exists(flux_path)
+
+prompts = [
+    ("agh_workstation",
+     "A sleek futuristic AI creative workstation glowing with blue and purple light, "
+     "multiple holographic screens showing AI-generated artwork, dark minimal setup, "
+     "cinematic lighting, ultra detailed, 8K, concept art style"),
+    ("agh_creator_after",
+     "A confident creative professional in front of multiple screens showing stunning "
+     "AI-generated videos and images, golden hour light, inspired expression, "
+     "cinematic, aspirational lifestyle photography"),
+    ("agh_gpu_power",
+     "An H100 GPU chip glowing with neon blue light, futuristic close-up macro shot, "
+     "cinematic dramatic lighting, chrome and silicon textures, tech product photography"),
+    ("agh_abstract_ai",
+     "Abstract visualization of artificial intelligence creativity, flowing neural "
+     "networks forming into beautiful art pieces, electric blue and purple particles, "
+     "deep space background, photorealistic digital art, 8K"),
+    ("agh_creator_before",
+     "A frustrated graphic designer staring at laptop showing paywall credits exhausted "
+     "message, dark moody lighting, editorial photography style, cinematic color grade"),
+    ("agh_brand",
+     "The letters AGH formed from glowing light particles and energy trails against "
+     "dark background, futuristic logo style, electric blue and cyan, cinematic 8K"),
+]
+
+pipe = StableDiffusionPipeline.from_pretrained(
+    "runwayml/stable-diffusion-v1-5",
+    torch_dtype=torch.float16,
+    safety_checker=None,
+).to("cuda")
+pipe.enable_attention_slicing()
+
+for name, prompt in prompts:
+    path = os.path.join(out_dir, f"{name}.png")
+    if os.path.exists(path):
+        print(f"Already exists: {path}")
+        continue
+    print(f"Generating: {name}...")
+    img = pipe(prompt, height=720, width=1280,
+               num_inference_steps=30, guidance_scale=7.5).images[0]
+    img.save(path)
+    print(f"Saved: {path}")
+
+print("IMAGES_DONE")
+PYEOF
+
+  IMG_B64=$(base64 -w0 /tmp/agh_promo_images.py)
   nsenter -t "${POD_PID}" -m -- bash -c "
-source /opt/wan21-env/bin/activate
-pip install --quiet easydict diffusers transformers accelerate huggingface_hub
-"
-  nsenter -t "${POD_PID}" -m -- bash -c "
-set -e
-source /opt/wan21-env/bin/activate
-cd /opt/Wan2.1
-python generate.py \
-  --task t2v-14B \
-  --size 1280*720 \
-  --ckpt_dir /opt/models/wan21 \
-  --sample_steps 50 \
-  --sample_guide_scale 6.0 \
-  --prompt \"${VIDEO_PROMPT}\" \
-  --save_file ${OUTPUT_DIR}/ai_video.mp4
-" && success "AI video saved: ${OUTPUT_DIR}/ai_video.mp4" \
-  || warn "Wan2.1 generation failed. Check /opt/models/wan21 exists."
+echo '${IMG_B64}' | base64 -d > /tmp/agh_promo_images.py
+source /opt/comfyui-env/bin/activate
+TMPDIR=${TMPDIR} python /tmp/agh_promo_images.py ${OUTPUT_DIR}/images 2>&1 | tail -20
+" && success "Brand images generated." || warn "Image generation failed — skipping slideshow."
+
+  # Assemble image slideshow — convert each PNG to 3s clip, concat
+  if ls "${OUTPUT_DIR}/images"/*.png &>/dev/null 2>&1; then
+    info "Assembling slideshow..."
+    SLIDE_CONCAT="${OUTPUT_DIR}/slides_concat.txt"
+    > "${SLIDE_CONCAT}"
+    n=0
+    for img in "${OUTPUT_DIR}/images"/*.png; do
+      clip="${OUTPUT_DIR}/slide_${n}.mp4"
+      nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error -loop 1 -t 3 -i '${img}' \
+  -vf 'scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,setsar=1' \
+  -c:v libx264 -preset fast -crf 20 -r 24 '${clip}'
+" 2>/dev/null
+      echo "file '${clip}'" >> "${SLIDE_CONCAT}"
+      n=$((n+1))
+    done
+    nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error \
+  -f concat -safe 0 -i '${SLIDE_CONCAT}' \
+  -c:v libx264 -preset fast -crf 20 \
+  '${OUTPUT_DIR}/s2_images.mp4'
+" && success "Image slideshow assembled (${n} images)." || warn "Slideshow failed."
+  fi
 else
-  warn "Wan2.1 not installed. Skipping AI video generation."
-  warn "Re-run setup_creative_suite.sh and select Wan2.1 (option 4)."
+  warn "Diffusers not available — skipping AI images."
 fi
 
-# ── Step 2: 3D Animation via Blender (headless render) ───────────────────────
-step "Step 2/3: Rendering 3D animation with Blender"
+# ── Step 3: AGH logo 3D reveal via Blender ────────────────────────────────────
+step "Step 3/6: AGH logo 3D reveal (Blender)"
 
-# Write script to host temp file (no quoting issues), encode as base64, decode inside pod
-cat > /tmp/blender_host_scene.py << 'PYEOF'
+if [[ "$HAS_BLENDER" == "true" ]]; then
+  cat > /tmp/agh_logo_blender.py << 'PYEOF'
 import bpy, math
 
 bpy.ops.object.select_all(action="SELECT")
 bpy.ops.object.delete()
 
-bpy.ops.object.camera_add(location=(0, -8, 3))
+# Camera
+bpy.ops.object.camera_add(location=(0, -12, 2))
 cam = bpy.context.object
-cam.rotation_euler = (math.radians(70), 0, 0)
+cam.rotation_euler = (math.radians(80), 0, 0)
 bpy.context.scene.camera = cam
 
-bpy.ops.mesh.primitive_uv_sphere_add(radius=1.5, location=(0, 0, 0))
-sphere = bpy.context.object
-mat = bpy.data.materials.new(name="GlowMat")
+# AGH text
+bpy.ops.object.text_add(location=(0, 0, 0))
+txt = bpy.context.object
+txt.data.body = "AGH"
+txt.data.align_x = "CENTER"
+txt.data.size = 2.0
+txt.data.extrude = 0.3
+txt.data.bevel_depth = 0.05
+mat = bpy.data.materials.new("AGHMat")
 mat.use_nodes = True
 nodes = mat.node_tree.nodes
+links = mat.node_tree.links
 nodes.clear()
 em = nodes.new("ShaderNodeEmission")
-em.inputs["Color"].default_value = (0.2, 0.6, 1.0, 1.0)
-em.inputs["Strength"].default_value = 5.0
+em.inputs["Color"].default_value = (0.0, 0.6, 1.0, 1.0)
+em.inputs["Strength"].default_value = 3.0
 out = nodes.new("ShaderNodeOutputMaterial")
-mat.node_tree.links.new(em.outputs["Emission"], out.inputs["Surface"])
-sphere.data.materials.append(mat)
-sphere.rotation_euler = (0, 0, 0)
-sphere.keyframe_insert(data_path="rotation_euler", frame=1)
-sphere.rotation_euler = (0, 0, math.radians(360))
-sphere.keyframe_insert(data_path="rotation_euler", frame=120)
+links.new(em.outputs["Emission"], out.inputs["Surface"])
+txt.data.materials.append(mat)
+bpy.ops.object.convert(target='MESH')
+txt.location = (-2.8, 0, 0)
 
-for i, (scale, col) in enumerate([(2.2,(0.0,0.8,1.0,1.0)),(2.8,(0.5,0.2,1.0,1.0)),(3.4,(1.0,0.4,0.0,1.0))]):
-    bpy.ops.mesh.primitive_torus_add(major_radius=scale, minor_radius=0.05,
-        location=(0,0,0), rotation=(math.radians(90*(i%2)), math.radians(30*i), 0))
-    r = bpy.context.object
-    rm = bpy.data.materials.new(name=f"RingMat{i}")
+# Scale reveal animation
+txt.scale = (0, 0, 0)
+txt.keyframe_insert("scale", frame=1)
+txt.scale = (1.0, 1.0, 1.0)
+txt.keyframe_insert("scale", frame=30)
+txt.rotation_euler = (0, math.radians(90), 0)
+txt.keyframe_insert("rotation_euler", frame=1)
+txt.rotation_euler = (0, 0, 0)
+txt.keyframe_insert("rotation_euler", frame=30)
+
+# Tagline
+bpy.ops.object.text_add(location=(-3.0, 0, -1.5))
+tag = bpy.context.object
+tag.data.body = "Creative Suite"
+tag.data.size = 0.55
+tag.data.extrude = 0.05
+tm = bpy.data.materials.new("TagMat")
+tm.use_nodes = True
+tn = tm.node_tree.nodes; tn.clear()
+te = tn.new("ShaderNodeEmission")
+te.inputs["Color"].default_value = (0.8, 0.9, 1.0, 1.0)
+te.inputs["Strength"].default_value = 1.5
+to = tn.new("ShaderNodeOutputMaterial")
+tm.node_tree.links.new(te.outputs["Emission"], to.inputs["Surface"])
+tag.data.materials.append(tm)
+bpy.ops.object.convert(target='MESH')
+tag.scale = (0, 0, 0)
+tag.keyframe_insert("scale", frame=35)
+tag.scale = (1, 1, 1)
+tag.keyframe_insert("scale", frame=55)
+
+# Orbital rings
+for i, (col, rad, tilt) in enumerate([
+    ((0.0, 0.6, 1.0, 1.0), 4.5, 75),
+    ((0.6, 0.1, 1.0, 1.0), 5.5, 45),
+    ((0.0, 1.0, 0.8, 1.0), 6.5, 20),
+]):
+    bpy.ops.mesh.primitive_torus_add(
+        major_radius=rad, minor_radius=0.04, location=(0, 0, 0),
+        rotation=(math.radians(tilt), math.radians(i*30), 0))
+    ring = bpy.context.object
+    rm = bpy.data.materials.new(f"Ring{i}")
     rm.use_nodes = True
     rn = rm.node_tree.nodes; rn.clear()
-    re = rn.new("ShaderNodeEmission"); re.inputs["Color"].default_value = col; re.inputs["Strength"].default_value = 3.0
+    re = rn.new("ShaderNodeEmission")
+    re.inputs["Color"].default_value = col
+    re.inputs["Strength"].default_value = 2.5
     ro = rn.new("ShaderNodeOutputMaterial")
     rm.node_tree.links.new(re.outputs["Emission"], ro.inputs["Surface"])
-    r.data.materials.append(rm)
-    r.keyframe_insert(data_path="rotation_euler", frame=1)
-    r.rotation_euler[2] += math.radians(360)
-    r.keyframe_insert(data_path="rotation_euler", frame=120)
+    ring.data.materials.append(rm)
+    ring.scale = (0, 0, 0)
+    ring.keyframe_insert("scale", frame=max(1, 20 - i*5))
+    ring.scale = (1, 1, 1)
+    ring.keyframe_insert("scale", frame=40 + i*5)
+    ring.keyframe_insert("rotation_euler", frame=1)
+    ring.rotation_euler = (math.radians(tilt), math.radians(i*30 + 360), math.radians(360*(1+i*0.5)))
+    ring.keyframe_insert("rotation_euler", frame=120)
 
+# World
 world = bpy.context.scene.world
 world.use_nodes = True
 bg = world.node_tree.nodes.get("Background")
 if bg:
-    bg.inputs["Color"].default_value = (0.0, 0.0, 0.05, 1.0)
+    bg.inputs["Color"].default_value = (0.0, 0.0, 0.02, 1.0)
 
+# Render
 scene = bpy.context.scene
 scene.frame_start = 1
 scene.frame_end = 120
@@ -129,74 +288,171 @@ scene.render.resolution_y = 720
 scene.render.image_settings.file_format = "FFMPEG"
 scene.render.ffmpeg.format = "MPEG4"
 scene.render.ffmpeg.codec = "H264"
-scene.render.filepath = "/tmp/agh-demo/blender_animation.mp4"
+scene.render.ffmpeg.constant_rate_factor = "HIGH"
+scene.render.filepath = "/tmp/agh_logo_out.mp4"
 scene.render.engine = "BLENDER_EEVEE"
 eevee = scene.eevee
 if hasattr(eevee, "use_bloom"):
     eevee.use_bloom = True
-    eevee.bloom_intensity = 0.5
-
+    eevee.bloom_intensity = 1.2
+    eevee.bloom_radius = 8.0
 bpy.ops.render.render(animation=True)
-print("Blender render complete.")
+print("BLENDER_DONE")
 PYEOF
 
-# Encode on host, decode inside pod's mount namespace — avoids all quoting issues
-SCENE_B64=$(base64 -w0 /tmp/blender_host_scene.py)
-
-nsenter -t "${POD_PID}" -m -- bash -c "
-echo '${SCENE_B64}' | base64 -d > /tmp/blender_demo_scene.py
-blender --background --python /tmp/blender_demo_scene.py 2>&1 | tail -10
-" && success "Blender animation saved: ${OUTPUT_DIR}/blender_animation.mp4" \
-  || warn "Blender render failed. Check blender is installed."
-
-# ── Step 3: Assemble final demo reel with FFmpeg ──────────────────────────────
-step "Step 3/3: Assembling final demo reel with FFmpeg"
-
-# Build concat list from whatever was generated
-CONCAT_FILE="/tmp/agh-demo/concat.txt"
-> "${CONCAT_FILE}"
-
-[[ -f "${OUTPUT_DIR}/ai_video.mp4" ]]        && echo "file '${OUTPUT_DIR}/ai_video.mp4'"        >> "${CONCAT_FILE}"
-[[ -f "${OUTPUT_DIR}/blender_animation.mp4" ]] && echo "file '${OUTPUT_DIR}/blender_animation.mp4'" >> "${CONCAT_FILE}"
-
-if [[ ! -s "${CONCAT_FILE}" ]]; then
-  warn "No video clips generated. Nothing to assemble."
-  exit 1
+  BLENDER_B64=$(base64 -w0 /tmp/agh_logo_blender.py)
+  nsenter -t "${POD_PID}" -m -- bash -c "
+echo '${BLENDER_B64}' | base64 -d > /tmp/agh_logo_blender.py
+TMPDIR=${TMPDIR} blender --background --python /tmp/agh_logo_blender.py 2>&1 | grep -E 'BLENDER_DONE|Fra:|Error' | tail -10
+cp /tmp/agh_logo_out.mp4 ${OUTPUT_DIR}/s3_logo.mp4 2>/dev/null || true
+" && success "AGH logo render done." || warn "Blender render failed."
+else
+  warn "Blender not found — skipping logo render."
 fi
 
-# Add title card at start
-nsenter -t "${POD_PID}" -m -- bash -c "
-ffmpeg -y \
-  -f lavfi -i color=c=0x000a1a:size=1280x720:duration=3:rate=24 \
-  -vf \"drawtext=text='AGH Creative Suite':fontsize=64:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2-40:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf,
-       drawtext=text='Powered by GPU — No Limits':fontsize=28:fontcolor=cyan:x=(w-text_w)/2:y=(h-text_h)/2+40:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf\" \
-  ${OUTPUT_DIR}/title_card.mp4 2>/dev/null
+# ── Step 4: AI video via Wan2.1 ───────────────────────────────────────────────
+step "Step 4/6: AI video (Wan2.1)"
+
+if [[ "$HAS_WAN21" == "true" ]]; then
+  nsenter -t "${POD_PID}" -m -- bash -c "
+source /opt/wan21-env/bin/activate
+cd /opt/Wan2.1
+TMPDIR=${TMPDIR} python generate.py \
+  --task t2v-14B \
+  --size 1280*720 \
+  --ckpt_dir ${MODELS_DIR}/wan21 \
+  --sample_steps 50 \
+  --sample_guide_scale 6.0 \
+  --prompt 'A futuristic AI creative studio. Holographic screens display stunning AI-generated artwork being created in real-time. Glowing particle effects flow between screens. Camera slowly pushes forward through the workspace. Deep blue and purple lighting. Cinematic, photorealistic, ultra smooth motion, 4K commercial quality.' \
+  --save_file ${OUTPUT_DIR}/videos/wan21_workspace.mp4
+" && {
+    # Trim to 15s for reel
+    nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error -i ${OUTPUT_DIR}/videos/wan21_workspace.mp4 \
+  -t 15 -c:v libx264 -preset fast -crf 20 ${OUTPUT_DIR}/s4_video.mp4
 "
+    success "Wan2.1 video done."
+  } || warn "Wan2.1 generation failed."
 
-# Prepend title card
-[[ -f "${OUTPUT_DIR}/title_card.mp4" ]] && \
-  sed -i "1s|^|file '${OUTPUT_DIR}/title_card.mp4'\n|" "${CONCAT_FILE}"
+  # Second clip: GPU power shot
+  nsenter -t "${POD_PID}" -m -- bash -c "
+source /opt/wan21-env/bin/activate
+cd /opt/Wan2.1
+TMPDIR=${TMPDIR} python generate.py \
+  --task t2v-14B \
+  --size 1280*720 \
+  --ckpt_dir ${MODELS_DIR}/wan21 \
+  --sample_steps 40 \
+  --sample_guide_scale 6.0 \
+  --prompt 'Abstract visualization of an AI generating an image, pixels assembling from noise into a stunning photorealistic landscape, time-lapse style, particle effects, glowing neural pathways, electric blue light, dramatic reveal, cinematic 4K.' \
+  --save_file ${OUTPUT_DIR}/videos/wan21_ai_gen.mp4
+" && {
+    nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error -i ${OUTPUT_DIR}/videos/wan21_ai_gen.mp4 \
+  -t 10 -c:v libx264 -preset fast -crf 20 ${OUTPUT_DIR}/s4b_video.mp4
+"
+    success "Wan2.1 second clip done."
+  } || warn "Second clip failed — skipping."
+else
+  warn "Wan2.1 not installed — skipping AI video."
+fi
 
-# Final concat
-nsenter -t "${POD_PID}" -m -- bash -c "
-ffmpeg -y -f concat -safe 0 -i ${CONCAT_FILE} \
-  -c:v libx264 -preset fast -crf 20 \
-  -vf 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2' \
-  ${OUTPUT_DIR}/AGH_Creative_Suite_Demo.mp4
-" && success "Final demo reel: ${OUTPUT_DIR}/AGH_Creative_Suite_Demo.mp4" \
-  || warn "FFmpeg assembly failed."
+# ── Step 5: Background music via MusicGen ─────────────────────────────────────
+step "Step 5/6: Background music (MusicGen)"
 
-# ── Done ─────────────────────────────────────────────────────────────────────
+if [[ "$HAS_MUSICGEN" == "true" ]]; then
+  nsenter -t "${POD_PID}" -m -- bash -c "
+source /opt/audio-env/bin/activate
+TMPDIR=${TMPDIR} python - << 'PYEOF'
+from audiocraft.models import MusicGen
+import torchaudio
+m = MusicGen.get_pretrained('melody')
+m.set_generation_params(duration=90)
+audio = m.generate([
+    'Epic cinematic orchestral music for a tech product reveal. '
+    'Starts minimal and mysterious, builds with intensity, '
+    'climaxes at 30 seconds with full orchestra and electronic elements, '
+    'inspiring and futuristic, suitable for a premium AI technology advertisement'
+])[0].cpu()
+torchaudio.save('${OUTPUT_DIR}/music.wav', audio, 32000)
+print('Music saved')
+PYEOF
+" && success "Background music generated." || warn "MusicGen failed — no music in final reel."
+fi
+
+# ── Step 6: Section cards + final assembly ────────────────────────────────────
+step "Step 6/6: Assembly"
+
+# Section cards
+[[ -f "${OUTPUT_DIR}/s2_images.mp4" ]] && \
+  make_card "${OUTPUT_DIR}/card_images.mp4" 2 "AI Image Generation" "Unlimited · No Credits · No Watermarks" "0x001a0a" "white" "00ff88"
+[[ -f "${OUTPUT_DIR}/s3_logo.mp4" ]] && \
+  make_card "${OUTPUT_DIR}/card_3d.mp4" 2 "3D Animation" "Blender — Real-time GPU Render" "0x050020" "white" "8833ff"
+[[ -f "${OUTPUT_DIR}/s4_video.mp4" ]] && \
+  make_card "${OUTPUT_DIR}/card_video.mp4" 2 "AI Video Generation" "Wan2.1 — No Time Limits" "0x1a0500" "white" "ff6600"
+
+# End card with tagline
+PORTAL_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' /tmp/cf-tunnel-portal.log 2>/dev/null | head -1 || echo "aghcloud.ai")
+make_card "${OUTPUT_DIR}/card_end.mp4" 6 \
+  "AGH Creative Suite" "This video was made using AGH Creative Suite" \
+  "0x000a1a" "white" "00ccff"
+
+# Build concat list
+CONCAT="${OUTPUT_DIR}/concat.txt"
+> "${CONCAT}"
+echo "file '${OUTPUT_DIR}/s1_title.mp4'" >> "${CONCAT}"
+[[ -f "${OUTPUT_DIR}/card_images.mp4" ]] && echo "file '${OUTPUT_DIR}/card_images.mp4'" >> "${CONCAT}"
+[[ -f "${OUTPUT_DIR}/s2_images.mp4" ]]   && echo "file '${OUTPUT_DIR}/s2_images.mp4'" >> "${CONCAT}"
+[[ -f "${OUTPUT_DIR}/card_3d.mp4" ]]     && echo "file '${OUTPUT_DIR}/card_3d.mp4'" >> "${CONCAT}"
+[[ -f "${OUTPUT_DIR}/s3_logo.mp4" ]]     && echo "file '${OUTPUT_DIR}/s3_logo.mp4'" >> "${CONCAT}"
+[[ -f "${OUTPUT_DIR}/card_video.mp4" ]]  && echo "file '${OUTPUT_DIR}/card_video.mp4'" >> "${CONCAT}"
+[[ -f "${OUTPUT_DIR}/s4_video.mp4" ]]    && echo "file '${OUTPUT_DIR}/s4_video.mp4'" >> "${CONCAT}"
+[[ -f "${OUTPUT_DIR}/s4b_video.mp4" ]]   && echo "file '${OUTPUT_DIR}/s4b_video.mp4'" >> "${CONCAT}"
+echo "file '${OUTPUT_DIR}/card_end.mp4'" >> "${CONCAT}"
+
+FINAL="${OUTPUT_DIR}/AGH_Creative_Suite_Promo.mp4"
+
+if [[ -f "${OUTPUT_DIR}/music.wav" ]]; then
+  nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error \
+  -f concat -safe 0 -i ${CONCAT} \
+  -i ${OUTPUT_DIR}/music.wav \
+  -filter_complex '[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v];[1:a]volume=0.35,afade=t=out:st=85:d=4[a]' \
+  -map '[v]' -map '[a]' \
+  -c:v libx264 -preset fast -crf 18 -c:a aac -b:a 192k -shortest \
+  ${FINAL}
+" && success "Final promo with music: ${FINAL}" || warn "Assembly failed."
+else
+  nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error \
+  -f concat -safe 0 -i ${CONCAT} \
+  -vf 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1' \
+  -c:v libx264 -preset fast -crf 18 \
+  ${FINAL}
+" && success "Final promo (no music): ${FINAL}" || warn "Assembly failed."
+fi
+
+# ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║              Demo Video Ready!                           ║${NC}"
-echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
+echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}${GREEN}║          AGH Promo Video Complete!                           ║${NC}"
+echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${BOLD}Output files:${NC}"
-[[ -f "${OUTPUT_DIR}/ai_video.mp4" ]]               && echo -e "  ${GREEN}•${NC} AI video (Wan2.1):    ${OUTPUT_DIR}/ai_video.mp4"
-[[ -f "${OUTPUT_DIR}/blender_animation.mp4" ]]      && echo -e "  ${GREEN}•${NC} 3D animation (Blender): ${OUTPUT_DIR}/blender_animation.mp4"
-[[ -f "${OUTPUT_DIR}/AGH_Creative_Suite_Demo.mp4" ]] && echo -e "  ${GREEN}•${NC} Final demo reel:      ${OUTPUT_DIR}/AGH_Creative_Suite_Demo.mp4"
+echo -e "${BOLD}Output:${NC} ${FINAL}"
+[[ -f "${FINAL}" ]] && echo -e "${BOLD}Size:${NC}   $(du -sh ${FINAL} | cut -f1)"
 echo ""
-echo -e "${BOLD}Copy to your laptop:${NC}"
-echo -e "  ${CYAN}scp shadeform@<SERVER_IP>:${OUTPUT_DIR}/AGH_Creative_Suite_Demo.mp4 ~/Desktop/${NC}"
+echo -e "${BOLD}All generated assets:${NC}"
+for f in \
+  "${OUTPUT_DIR}/images/"*.png \
+  "${OUTPUT_DIR}/videos/"*.mp4 \
+  "${OUTPUT_DIR}/s3_logo.mp4" \
+  "${OUTPUT_DIR}/music.wav" \
+  "${FINAL}"; do
+  [[ -f "$f" ]] && echo -e "  ${GREEN}•${NC} $(basename $f)  ($(du -sh $f 2>/dev/null | cut -f1))"
+done
+echo ""
+echo -e "${BOLD}Download:${NC}"
+echo -e "  ${CYAN}scp shadeform@<SERVER_IP>:${FINAL} ~/Desktop/${NC}"
+echo ""
+echo -e "${YELLOW}This video was made entirely using AGH Creative Suite.${NC}"
 echo ""

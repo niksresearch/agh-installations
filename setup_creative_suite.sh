@@ -335,7 +335,7 @@ git clone https://github.com/Wan-Video/Wan2.1 /opt/Wan2.1 2>/dev/null || \
 python3 -m venv /opt/wan21-env
 source /opt/wan21-env/bin/activate
 pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install --quiet diffusers transformers accelerate easydict gradio
+pip install --quiet wheel setuptools
 pip install --quiet -r /opt/Wan2.1/requirements.txt
 pip install --quiet huggingface_hub
 pip install flash-attn --no-build-isolation --quiet 2>/dev/null || \
@@ -569,22 +569,64 @@ success "Pod environment configured (TMPDIR=${TMPDIR_OVERRIDE})."
 # ── Phase 3: Always-on tools ──────────────────────────────────────────────────
 step "Phase 3/5: Installing always-on creative tools"
 
-info "Installing GIMP, Krita, Kdenlive, Audacity, Inkscape, Chrome..."
+info "Installing GIMP, Krita, Kdenlive, Audacity, Inkscape, Chrome, mpv, eog..."
 nsenter -t "${POD_PID}" -m -- bash -c "
 export DEBIAN_FRONTEND=noninteractive
 apt-get install -y --no-install-recommends \
   gimp krita kdenlive audacity inkscape \
+  mpv eog \
   python3-pip python3-venv git curl wget \
   2>/dev/null
 
 # Chrome
 wget -qO /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 dpkg -i /tmp/chrome.deb 2>/dev/null || apt-get install -f -y -q
-# Add --no-sandbox flag (required inside pod/container environment)
 sed -i 's|Exec=/usr/bin/google-chrome-stable|Exec=/usr/bin/google-chrome-stable --no-sandbox|g' \
   /usr/share/applications/google-chrome.desktop 2>/dev/null || true
 rm -f /tmp/chrome.deb
-" && success "Core creative tools + Chrome installed." || warn "Some core tools failed."
+
+# Desktop shortcuts for media viewers
+mkdir -p /root/Desktop
+
+cat > /root/Desktop/Video-Player.desktop << 'DEOF'
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Video Player (mpv)
+Comment=Play AI-generated videos
+Exec=bash -c 'mpv \$(zenity --file-selection --title=\"Open Video\" --file-filter=\"Videos | *.mp4 *.webm *.avi *.mkv\" 2>/dev/null) 2>/dev/null'
+Icon=video-x-generic
+Terminal=false
+Categories=Video;Player;
+DEOF
+chmod +x /root/Desktop/Video-Player.desktop
+
+cat > /root/Desktop/Image-Viewer.desktop << 'DEOF'
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Image Viewer (eog)
+Comment=View AI-generated images
+Exec=bash -c 'eog \$(zenity --file-selection --title=\"Open Image\" --file-filter=\"Images | *.png *.jpg *.jpeg *.webp\" 2>/dev/null) 2>/dev/null'
+Icon=image-x-generic
+Terminal=false
+Categories=Graphics;Viewer;
+DEOF
+chmod +x /root/Desktop/Image-Viewer.desktop
+
+cat > /root/Desktop/Browse-Outputs.desktop << 'DEOF'
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Browse AI Outputs
+Comment=Open output folder in file manager
+Exec=thunar /ephemeral
+Icon=folder-pictures
+Terminal=false
+Categories=FileManager;
+DEOF
+chmod +x /root/Desktop/Browse-Outputs.desktop
+" && success "Core creative tools + media viewers + desktop shortcuts installed." || warn "Some core tools failed."
 
 info "Installing ComfyUI (AI workflow hub on port 8188)..."
 nsenter -t "${POD_PID}" -m -- bash -c "
@@ -726,7 +768,9 @@ if [[ -d /opt/Wan2.1 ]]; then
   nsenter -t "${POD_PID}" -m -- bash -c "
 source /opt/wan21-env/bin/activate
 cd /opt/Wan2.1
-TMPDIR=${TMPDIR_OVERRIDE} nohup python gradio_app.py \
+export AGH_MODELS=${MODELS_DIR}
+export TMPDIR=${TMPDIR_OVERRIDE}
+nohup python gradio_app.py \
   > ${DATA_DIR}/wan21-gradio.log 2>&1 &
 " && success "Wan2.1 Gradio UI starting on port 7870." || warn "Wan2.1 Gradio start failed."
   SERVICE_PORTS[wan21]=7870
