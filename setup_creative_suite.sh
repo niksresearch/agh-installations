@@ -288,13 +288,13 @@ install_flux() {
 source /opt/comfyui-env/bin/activate
 hf download ${FLUX_REPO} \
   ${FLUX_FILE} \
-  --local-dir /opt/ComfyUI/models/unet/ ${TOKEN_ARG}
+  --local-dir ${MODELS_DIR}/comfyui/unet/ ${TOKEN_ARG}
 hf download comfyanonymous/flux_text_encoders \
   clip_l.safetensors t5xxl_fp8_e4m3fn.safetensors \
-  --local-dir /opt/ComfyUI/models/clip/ ${TOKEN_ARG}
+  --local-dir ${MODELS_DIR}/comfyui/clip/ ${TOKEN_ARG}
 hf download ${FLUX_REPO} \
   ae.safetensors \
-  --local-dir /opt/ComfyUI/models/vae/ ${TOKEN_ARG}
+  --local-dir ${MODELS_DIR}/comfyui/vae/ ${TOKEN_ARG}
 " && success "FLUX model downloaded (${FLUX_REPO})." \
   || warn "FLUX download failed. Accept license at https://huggingface.co/${FLUX_REPO} then re-run with HF_TOKEN=hf_xxx"
 }
@@ -600,7 +600,9 @@ pip install --quiet huggingface_hub
 git clone https://github.com/comfyanonymous/ComfyUI /opt/ComfyUI 2>/dev/null || \
   (cd /opt/ComfyUI && git pull)
 pip install --quiet -r /opt/ComfyUI/requirements.txt
-mkdir -p /opt/ComfyUI/models/{checkpoints,loras,vae,clip,unet,controlnet,upscale_models}
+mkdir -p ${MODELS_DIR}/comfyui/{checkpoints,loras,vae,clip,unet,controlnet,upscale_models}
+rm -rf /opt/ComfyUI/models
+ln -sfn ${MODELS_DIR}/comfyui /opt/ComfyUI/models
 mkdir -p /opt/ComfyUI/user/default/workflows
 
 # Pre-built workflow: Wan2.1 text-to-video
