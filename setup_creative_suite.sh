@@ -21,6 +21,9 @@ LOGS_DIR="/tmp/creative-suite-logs"
 TMPDIR_OVERRIDE="/tmp"
 SELECTED_APPS=""
 POD_PID=""
+declare -A SERVICE_PORTS=()
+declare -A SERVICE_NAMES=()
+declare -A TUNNEL_URLS=()
 
 # ── Auto-detect and mount extra data disk ────────────────────────────────────
 # Shadeform (and most GPU cloud) VMs ship with a second unmounted disk for data.
@@ -107,6 +110,54 @@ info "Host: $(hostname)  |  GPU: ${GPU_NAME}  |  Time: $(date '+%Y-%m-%d %H:%M:%
 mount_data_disk
 mkdir -p "${MODELS_DIR}" "${APPS_DIR}" "${LOGS_DIR}" "${TMPDIR_OVERRIDE}"
 export TMPDIR="${TMPDIR_OVERRIDE}"
+
+# ── HuggingFace account setup ─────────────────────────────────────────────────
+HF_TOKEN_FILE="/root/.hf_token"
+FLUX_REPO=""
+
+if [[ -z "${HF_TOKEN:-}" ]] && [[ -f "${HF_TOKEN_FILE}" ]]; then
+  HF_TOKEN=$(cat "${HF_TOKEN_FILE}")
+  success "HuggingFace token loaded from saved file."
+fi
+
+if [[ -z "${HF_TOKEN:-}" ]]; then
+  echo ""
+  echo -e "${BOLD}HuggingFace Account Setup${NC}"
+  echo -e "${CYAN}HuggingFace is used to download AI models (FLUX image generation etc.)${NC}"
+  echo ""
+  echo -e "  ${CYAN}[1]${NC} ${BOLD}I have a HuggingFace account + token${NC}  — full model access (recommended)"
+  echo -e "         Free account works. Get token: https://huggingface.co/settings/tokens"
+  echo ""
+  echo -e "  ${CYAN}[2]${NC} ${BOLD}Skip for now${NC}  — install everything except FLUX image models"
+  echo -e "         You can add FLUX later by re-running this script"
+  echo ""
+  read -rp "$(echo -e "${BOLD}Choose [1-2]:${NC} ")" hf_choice
+
+  case "${hf_choice}" in
+    1)
+      echo ""
+      echo -e "${CYAN}Steps if you haven't already:${NC}"
+      echo -e "  1. Sign up free at https://huggingface.co"
+      echo -e "  2. Accept FLUX license: https://huggingface.co/black-forest-labs/FLUX.1-schnell"
+      echo -e "  3. Get token: https://huggingface.co/settings/tokens → New token → Read"
+      echo ""
+      read -rsp "$(echo -e "${BOLD}Paste token:${NC} ")" HF_TOKEN
+      echo ""
+      if [[ -n "${HF_TOKEN}" ]]; then
+        echo "${HF_TOKEN}" > "${HF_TOKEN_FILE}"
+        chmod 600 "${HF_TOKEN_FILE}"
+        success "Token saved. Will be reused on future runs."
+      else
+        warn "No token entered. FLUX will be skipped."
+      fi
+      ;;
+    *)
+      warn "Skipping HuggingFace. FLUX image models will not be installed."
+      warn "Re-run this script anytime to add them."
+      ;;
+  esac
+fi
+export HF_TOKEN="${HF_TOKEN:-}"
 
 # ── Password prompt ───────────────────────────────────────────────────────────
 echo ""
@@ -212,9 +263,10 @@ info "Selected: ${SELECTED_APPS:-core tools only}"
 # ── Install functions ─────────────────────────────────────────────────────────
 
 install_flux() {
-  # FLUX.1-dev is gated (requires HF account + license approval).
-  # FLUX.1-schnell is Apache 2.0 — no auth, no approval, nearly same quality.
-  # Set HF_TOKEN env var before running setup to unlock FLUX.1-dev.
+  # Both FLUX.1-dev and FLUX.1-schnell require HF account + license approval.
+  # Accept at https://huggingface.co/black-forest-labs/FLUX.1-schnell
+  # Then get token at https://huggingface.co/settings/tokens
+  # Pass as: HF_TOKEN=hf_xxx sudo bash setup_creative_suite.sh
   if [[ -n "${HF_TOKEN:-}" ]]; then
     FLUX_REPO="black-forest-labs/FLUX.1-dev"
     FLUX_FILE="flux1-dev.safetensors"
@@ -222,24 +274,29 @@ install_flux() {
   else
     FLUX_REPO="black-forest-labs/FLUX.1-schnell"
     FLUX_FILE="flux1-schnell.safetensors"
-    info "Downloading FLUX.1-schnell model (~24GB, Apache 2.0 — no token needed)..."
-    info "To use FLUX.1-dev (higher quality), set HF_TOKEN and re-run."
+    info "Downloading FLUX.1-schnell model (~24GB)..."
+    warn "FLUX requires license acceptance. If download fails:"
+    warn "  1. Visit https://huggingface.co/black-forest-labs/FLUX.1-schnell"
+    warn "  2. Accept license, get token from https://huggingface.co/settings/tokens"
+    warn "  3. Re-run: HF_TOKEN=hf_xxx sudo bash setup_creative_suite.sh"
   fi
+
+  local TOKEN_ARG=""
+  [[ -n "${HF_TOKEN:-}" ]] && TOKEN_ARG="--token ${HF_TOKEN}"
 
   nsenter -t "${POD_PID}" -m -- bash -c "
 source /opt/comfyui-env/bin/activate
-${HF_TOKEN:+export HF_TOKEN=${HF_TOKEN}}
 hf download ${FLUX_REPO} \
   ${FLUX_FILE} \
-  --local-dir /opt/ComfyUI/models/unet/
+  --local-dir /opt/ComfyUI/models/unet/ ${TOKEN_ARG}
 hf download comfyanonymous/flux_text_encoders \
   clip_l.safetensors t5xxl_fp8_e4m3fn.safetensors \
-  --local-dir /opt/ComfyUI/models/clip/
+  --local-dir /opt/ComfyUI/models/clip/ ${TOKEN_ARG}
 hf download ${FLUX_REPO} \
   ae.safetensors \
-  --local-dir /opt/ComfyUI/models/vae/
+  --local-dir /opt/ComfyUI/models/vae/ ${TOKEN_ARG}
 " && success "FLUX model downloaded (${FLUX_REPO})." \
-  || warn "FLUX download failed. If using dev model, accept license at: https://huggingface.co/${FLUX_REPO}"
+  || warn "FLUX download failed. Accept license at https://huggingface.co/${FLUX_REPO} then re-run with HF_TOKEN=hf_xxx"
 }
 
 install_a1111() {
@@ -643,10 +700,6 @@ chmod +x /usr/local/bin/musicgen-generate
 # ── Phase 5: Start AI services ───────────────────────────────────────────────
 step "Phase 5/5: Starting services"
 
-# Track which services are running (for portal + tunnels)
-declare -A SERVICE_PORTS
-declare -A SERVICE_NAMES
-
 # ComfyUI on port 8188
 if [[ -d /opt/ComfyUI ]]; then
   nsenter -t "${POD_PID}" -m -- bash -c "
@@ -798,10 +851,10 @@ info "Starting cloudflare tunnels for external access (no SSH needed)..."
 pkill cloudflared 2>/dev/null || true
 sleep 1
 
-declare -A TUNNEL_URLS
-
 start_tunnel() {
-  local name="$1" port="$2" logfile="/tmp/cf-tunnel-${name}.log"
+  local name="$1"
+  local port="$2"
+  local logfile="/tmp/cf-tunnel-${name}.log"
   cloudflared tunnel --url "http://localhost:${port}" > "${logfile}" 2>&1 &
   # Wait up to 30s for URL
   for i in $(seq 1 30); do
