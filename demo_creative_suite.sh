@@ -71,13 +71,38 @@ step() {
 
 # ── Auto-detect paths ─────────────────────────────────────────────────────────
 [[ -f /etc/profile.d/agh-paths.sh ]] && source /etc/profile.d/agh-paths.sh
-DATA_DIR="${AGH_DATA:-/ephemeral}"
-MODELS_DIR="${AGH_MODELS:-/ephemeral/models}"
+
+# Fall back to largest available disk if agh-paths.sh not set
+if [[ -z "${AGH_DATA:-}" ]]; then
+  for candidate in /ephemeral /data /mnt/data; do
+    if mountpoint -q "${candidate}" 2>/dev/null; then
+      AGH_DATA="${candidate}"
+      AGH_MODELS="${candidate}/models"
+      break
+    fi
+  done
+  # Last resort: root disk
+  AGH_DATA="${AGH_DATA:-/opt}"
+  AGH_MODELS="${AGH_MODELS:-/opt/models}"
+fi
+
+DATA_DIR="${AGH_DATA}"
+MODELS_DIR="${AGH_MODELS}"
 export TMPDIR="${TMPDIR:-${DATA_DIR}/tmp}"
-mkdir -p "${TMPDIR}"
 
 OUTPUT_DIR="${DATA_DIR}/agh-promo"
-mkdir -p "${OUTPUT_DIR}/images" "${OUTPUT_DIR}/videos"
+LOG_FILE="${OUTPUT_DIR}/demo.log"
+mkdir -p "${OUTPUT_DIR}/images" "${OUTPUT_DIR}/videos" "${DATA_DIR}/tmp"
+
+# Re-exec with logging if not already logging
+if [[ "${DEMO_LOGGING:-0}" != "1" ]]; then
+  export DEMO_LOGGING=1
+  echo "Starting demo. Log: ${LOG_FILE}"
+  exec sudo DEMO_LOGGING=1 nohup bash "$0" >> "${LOG_FILE}" 2>&1 &
+  echo "Demo PID: $!"
+  echo "Watch: tail -f ${LOG_FILE}"
+  exit 0
+fi
 
 POD_PID=$(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}' | head -1)
 [[ -n "$POD_PID" ]] || { echo -e "${RED}[ERROR]${NC} Pod not running. Run setup_creative_suite.sh first."; exit 1; }
