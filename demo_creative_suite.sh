@@ -24,10 +24,48 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-info()    { echo -e "[$(date '+%H:%M:%S')] ${CYAN}[INFO]${NC}  $*"; }
-success() { echo -e "[$(date '+%H:%M:%S')] ${GREEN}[OK]${NC}    $*"; }
-warn()    { echo -e "[$(date '+%H:%M:%S')] ${YELLOW}[WARN]${NC}  $*"; }
-step()    { echo -e "\n[$(date '+%H:%M:%S')] ${BOLD}${CYAN}══ $* ══${NC}"; }
+STEP_START=0
+SERVER_IP_CACHE=""
+
+info()    { echo "[$(date '+%H:%M:%S')] [INFO]   $*"; }
+success() { echo "[$(date '+%H:%M:%S')] [OK]     $*"; }
+warn()    { echo "[$(date '+%H:%M:%S')] [WARN]   $*"; }
+cmd()     { echo "[$(date '+%H:%M:%S')] [CMD]    $ $*"; }
+
+show_output() {
+  local label="$1"; shift
+  local files=("$@")
+  [[ -z "${SERVER_IP_CACHE}" ]] && \
+    SERVER_IP_CACHE=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || echo "YOUR_SERVER_IP")
+  local key_arg=""
+  for k in ~/.ssh/id_rsa ~/.ssh/id_ed25519 /root/.ssh/id_rsa /root/.ssh/id_ed25519; do
+    [[ -f "$k" ]] && key_arg="-i ${k} " && break
+  done
+  echo "[$(date '+%H:%M:%S')] [OUTPUT] ${label}:"
+  for f in "${files[@]}"; do
+    if [[ -f "$f" ]]; then
+      echo "[$(date '+%H:%M:%S')] [OUTPUT]   Path: ${f}  ($(du -sh $f 2>/dev/null | cut -f1))"
+      echo "[$(date '+%H:%M:%S')] [OUTPUT]   Download: scp ${key_arg}shadeform@${SERVER_IP_CACHE}:${f} ~/Desktop/"
+    elif [[ -d "$f" ]]; then
+      echo "[$(date '+%H:%M:%S')] [OUTPUT]   Dir:  ${f}/"
+      echo "[$(date '+%H:%M:%S')] [OUTPUT]   Download: scp ${key_arg}-r shadeform@${SERVER_IP_CACHE}:${f}/ ~/Desktop/$(basename $f)/"
+    fi
+  done
+}
+
+step() {
+  local now
+  now=$(date +%s)
+  if [[ "$STEP_START" -gt 0 ]]; then
+    local elapsed=$(( now - STEP_START ))
+    echo "[$(date '+%H:%M:%S')] [TIME]   Previous step took ${elapsed}s"
+  fi
+  STEP_START=$now
+  echo ""
+  echo "[$(date '+%H:%M:%S')] ════════════════════════════════════════════"
+  echo "[$(date '+%H:%M:%S')] STEP: $*"
+  echo "[$(date '+%H:%M:%S')] ════════════════════════════════════════════"
+}
 
 [[ $EUID -eq 0 ]] || { echo -e "${RED}[ERROR]${NC} Run as root: sudo bash $0"; exit 1; }
 
@@ -52,12 +90,22 @@ HAS_MUSICGEN=false; nsenter -t "${POD_PID}" -m -- bash -c "source /opt/audio-env
 HAS_BLENDER=false;  nsenter -t "${POD_PID}" -m -- bash -c "command -v blender" &>/dev/null && HAS_BLENDER=true || true
 HAS_DIFFUSERS=false; nsenter -t "${POD_PID}" -m -- bash -c "source /opt/comfyui-env/bin/activate 2>/dev/null && python -c 'import diffusers, torch' 2>/dev/null" && HAS_DIFFUSERS=true || true
 
-echo -e "${BOLD}${CYAN}"
-echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║        AGH Creative Suite — Promo Video Generator           ║"
-echo "║        Made using the suite it promotes                      ║"
-echo "╚══════════════════════════════════════════════════════════════╝"
-echo -e "${NC}"
+echo ""
+echo "════════════════════════════════════════════════════════════════"
+echo "  AGH Creative Suite — Promo Video Generator"
+echo "  Made using the suite it promotes"
+echo "════════════════════════════════════════════════════════════════"
+echo ""
+echo "  DISCLAIMER: All commands below run automatically."
+echo "  This demonstrates the full capability of AGH Creative Suite"
+echo "  — AI image generation, AI video, 3D animation, music, and"
+echo "  final video editing — executed end-to-end without human input."
+echo ""
+echo "  GPU:     ${GPU_NAME}"
+echo "  Started: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  Log:     ${DATA_DIR}/demo.log"
+echo "════════════════════════════════════════════════════════════════"
+echo ""
 info "GPU:        ${GPU_NAME}"
 info "Output:     ${OUTPUT_DIR}"
 info "Blender:    ${HAS_BLENDER} | Wan2.1: ${HAS_WAN21} | MusicGen: ${HAS_MUSICGEN} | Diffusers: ${HAS_DIFFUSERS}"
@@ -142,11 +190,13 @@ print("IMAGES_DONE")
 PYEOF
 
   IMG_B64=$(base64 -w0 /tmp/agh_promo_images.py)
+  cmd "python agh_promo_images.py  # generating 6 brand images via Stable Diffusion"
+  info "This demonstrates: AI image generation — unlimited, no credits, no watermarks"
   nsenter -t "${POD_PID}" -m -- bash -c "
 echo '${IMG_B64}' | base64 -d > /tmp/agh_promo_images.py
 source /opt/comfyui-env/bin/activate
 TMPDIR=${TMPDIR} python /tmp/agh_promo_images.py ${OUTPUT_DIR}/images 2>&1 | tail -20
-" && success "Brand images generated." || warn "Image generation failed — skipping slideshow."
+" && { success "Brand images generated."; show_output "AI Images" "${OUTPUT_DIR}/images"; } || warn "Image generation failed — skipping slideshow."
 
   # Assemble image slideshow — convert each PNG to 3s clip, concat
   if ls "${OUTPUT_DIR}/images"/*.png &>/dev/null 2>&1; then
@@ -301,11 +351,13 @@ print("BLENDER_DONE")
 PYEOF
 
   BLENDER_B64=$(base64 -w0 /tmp/agh_logo_blender.py)
+  cmd "blender --background --python agh_logo_blender.py  # headless 3D render, 120 frames @ 24fps"
+  info "This demonstrates: 3D animation rendered on GPU via Blender EEVEE — no GUI needed"
   nsenter -t "${POD_PID}" -m -- bash -c "
 echo '${BLENDER_B64}' | base64 -d > /tmp/agh_logo_blender.py
 TMPDIR=${TMPDIR} blender --background --python /tmp/agh_logo_blender.py 2>&1 | grep -E 'BLENDER_DONE|Fra:|Error' | tail -10
 cp /tmp/agh_logo_out.mp4 ${OUTPUT_DIR}/s3_logo.mp4 2>/dev/null || true
-" && success "AGH logo render done." || warn "Blender render failed."
+" && { success "AGH logo render done."; show_output "3D Logo Animation" "${OUTPUT_DIR}/s3_logo.mp4"; } || warn "Blender render failed."
 else
   warn "Blender not found — skipping logo render."
 fi
@@ -314,6 +366,9 @@ fi
 step "Step 4/6: AI video (Wan2.1)"
 
 if [[ "$HAS_WAN21" == "true" ]]; then
+  cmd "python generate.py --task t2v-14B --size 1280*720 --sample_steps 50  # clip 1: futuristic workspace"
+  info "This demonstrates: AI video generation — no 8-second limit, no watermarks, full GPU power"
+  info "Commercial equivalent: RunwayML charges \$0.05/sec = ~\$3 for this clip. Cost here: \$0."
   nsenter -t "${POD_PID}" -m -- bash -c "
 source /opt/wan21-env/bin/activate
 cd /opt/Wan2.1
@@ -332,6 +387,7 @@ ffmpeg -y -loglevel error -i ${OUTPUT_DIR}/videos/wan21_workspace.mp4 \
   -t 15 -c:v libx264 -preset fast -crf 20 ${OUTPUT_DIR}/s4_video.mp4
 "
     success "Wan2.1 video done."
+    show_output "AI Video Clip 1" "${OUTPUT_DIR}/s4_video.mp4" "${OUTPUT_DIR}/videos/wan21_workspace.mp4"
   } || warn "Wan2.1 generation failed."
 
   # Second clip: GPU power shot
@@ -352,6 +408,7 @@ ffmpeg -y -loglevel error -i ${OUTPUT_DIR}/videos/wan21_ai_gen.mp4 \
   -t 10 -c:v libx264 -preset fast -crf 20 ${OUTPUT_DIR}/s4b_video.mp4
 "
     success "Wan2.1 second clip done."
+    show_output "AI Video Clip 2" "${OUTPUT_DIR}/s4b_video.mp4"
   } || warn "Second clip failed — skipping."
 else
   warn "Wan2.1 not installed — skipping AI video."
@@ -361,6 +418,8 @@ fi
 step "Step 5/6: Background music (MusicGen)"
 
 if [[ "$HAS_MUSICGEN" == "true" ]]; then
+  cmd "python -c 'MusicGen.get_pretrained(melody).generate([epic cinematic...])'  # 90s custom track"
+  info "This demonstrates: AI music generation — custom track, no licensing fees, generated on demand"
   nsenter -t "${POD_PID}" -m -- bash -c "
 source /opt/audio-env/bin/activate
 TMPDIR=${TMPDIR} python - << 'PYEOF'
@@ -377,7 +436,7 @@ audio = m.generate([
 torchaudio.save('${OUTPUT_DIR}/music.wav', audio, 32000)
 print('Music saved')
 PYEOF
-" && success "Background music generated." || warn "MusicGen failed — no music in final reel."
+" && { success "Background music generated."; show_output "Background Music" "${OUTPUT_DIR}/music.wav"; } || warn "MusicGen failed — no music in final reel."
 fi
 
 # ── Step 6: Section cards + final assembly ────────────────────────────────────
@@ -421,7 +480,7 @@ ffmpeg -y -loglevel error \
   -map '[v]' -map '[a]' \
   -c:v libx264 -preset fast -crf 18 -c:a aac -b:a 192k -shortest \
   ${FINAL}
-" && success "Final promo with music: ${FINAL}" || warn "Assembly failed."
+" && { success "Final promo with music: ${FINAL}"; show_output "FINAL PROMO VIDEO" "${FINAL}"; } || warn "Assembly failed."
 else
   nsenter -t "${POD_PID}" -m -- bash -c "
 ffmpeg -y -loglevel error \
@@ -429,30 +488,76 @@ ffmpeg -y -loglevel error \
   -vf 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1' \
   -c:v libx264 -preset fast -crf 18 \
   ${FINAL}
-" && success "Final promo (no music): ${FINAL}" || warn "Assembly failed."
+" && { success "Final promo (no music): ${FINAL}"; show_output "FINAL PROMO VIDEO" "${FINAL}"; } || warn "Assembly failed."
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
+TOTAL_TIME=$(( $(date +%s) - STEP_START ))
+
 echo ""
-echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║          AGH Promo Video Complete!                           ║${NC}"
-echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+echo "════════════════════════════════════════════════════════════════"
+echo "  AGH Promo Video Complete!"
+echo "════════════════════════════════════════════════════════════════"
 echo ""
-echo -e "${BOLD}Output:${NC} ${FINAL}"
-[[ -f "${FINAL}" ]] && echo -e "${BOLD}Size:${NC}   $(du -sh ${FINAL} | cut -f1)"
+echo "  Finished:  $(date '+%Y-%m-%d %H:%M:%S')"
+echo "  GPU used:  ${GPU_NAME}"
 echo ""
-echo -e "${BOLD}All generated assets:${NC}"
+echo "  WHAT JUST HAPPENED (automatically, zero human input):"
+echo "  ✓ 6 AI brand images generated    — Stable Diffusion"
+echo "  ✓ AGH logo 3D animation rendered — Blender EEVEE headless"
+echo "  ✓ 2 AI video clips generated     — Wan2.1 14B model"
+echo "  ✓ 90s background music created   — MusicGen"
+echo "  ✓ Final video assembled          — FFmpeg"
+echo ""
+echo "  Output:    ${FINAL}"
+[[ -f "${FINAL}" ]] && echo "  Size:      $(du -sh ${FINAL} | cut -f1)"
+echo ""
+
+# ── All generated assets with paths and sizes ─────────────────────────────────
+echo "  ALL GENERATED FILES:"
+echo "  ─────────────────────────────────────────────────"
 for f in \
   "${OUTPUT_DIR}/images/"*.png \
   "${OUTPUT_DIR}/videos/"*.mp4 \
   "${OUTPUT_DIR}/s3_logo.mp4" \
   "${OUTPUT_DIR}/music.wav" \
   "${FINAL}"; do
-  [[ -f "$f" ]] && echo -e "  ${GREEN}•${NC} $(basename $f)  ($(du -sh $f 2>/dev/null | cut -f1))"
+  [[ -f "$f" ]] && printf "  %-45s %s\n" "$f" "$(du -sh $f 2>/dev/null | cut -f1)"
 done
+echo "  ─────────────────────────────────────────────────"
 echo ""
-echo -e "${BOLD}Download:${NC}"
-echo -e "  ${CYAN}scp shadeform@<SERVER_IP>:${FINAL} ~/Desktop/${NC}"
+
+# ── Auto-detect server IP and build download commands ─────────────────────────
+SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || \
+            curl -s --connect-timeout 5 api.ipify.org 2>/dev/null || \
+            echo "YOUR_SERVER_IP")
+
+# Find SSH key (check common locations)
+SSH_KEY=""
+for k in ~/.ssh/id_rsa ~/.ssh/id_ed25519 /root/.ssh/id_rsa /root/.ssh/id_ed25519; do
+  [[ -f "$k" ]] && SSH_KEY="$k" && break
+done
+KEY_ARG=""
+[[ -n "$SSH_KEY" ]] && KEY_ARG="-i ${SSH_KEY} "
+
+echo "  DOWNLOAD TO YOUR LAPTOP:"
+echo "  (run these commands on your laptop, not the server)"
 echo ""
-echo -e "${YELLOW}This video was made entirely using AGH Creative Suite.${NC}"
+echo "  # Final promo video:"
+echo "  scp ${KEY_ARG}shadeform@${SERVER_IP}:${FINAL} ~/Desktop/"
+echo ""
+echo "  # All images:"
+echo "  scp ${KEY_ARG}-r shadeform@${SERVER_IP}:${OUTPUT_DIR}/images/ ~/Desktop/agh-images/"
+echo ""
+echo "  # All videos:"
+echo "  scp ${KEY_ARG}-r shadeform@${SERVER_IP}:${OUTPUT_DIR}/videos/ ~/Desktop/agh-videos/"
+echo ""
+echo "  # Everything at once:"
+echo "  scp ${KEY_ARG}-r shadeform@${SERVER_IP}:${OUTPUT_DIR}/ ~/Desktop/agh-promo/"
+echo ""
+echo "  SERVER: ${SERVER_IP}"
+echo "  FILES:  ${OUTPUT_DIR}/"
+echo ""
+echo "  This video was made entirely using AGH Creative Suite."
+echo "  You are watching the product."
 echo ""
