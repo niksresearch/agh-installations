@@ -398,15 +398,42 @@ Click **Render to File** → ~5 minutes.
 ## Final Output
 
 ```
-/ephemeral/promo/AGH_Creative_Suite_FINAL.mp4
+<DATA_DIR>/agh-promo/AGH_Creative_Suite_Promo.mp4
 ```
+`<DATA_DIR>` = `/ephemeral` (Shadeform) or `/opt` (single-disk VMs). Script prints exact path.
 
-A 70-second promotional video for AGH Creative Suite, made entirely using AGH Creative Suite.
+A ~70-second branded promotional video for AGH Creative Suite, made entirely using AGH Creative Suite.
 
-**Download to laptop:**
+**Download whole folder to laptop:**
 ```bash
-scp shadeform@<SERVER_IP>:/ephemeral/promo/AGH_Creative_Suite_FINAL.mp4 ~/Desktop/
+scp -r shadeform@<SERVER_IP>:<DATA_DIR>/agh-promo/ ~/Desktop/agh-promo/
 ```
+
+---
+
+## AGH Branding (required for a proper promo look)
+
+The video must look branded, not like raw clips stitched together:
+
+- **Title card** — large `AGH` logo + "CREATIVE SUITE" + tagline (5s open)
+- **Section cards** — labelled transitions ("AI Video Generation — No Time Limits") between each capability
+- **Persistent watermark** — small `AGH / Creative Suite` top-right corner across the ENTIRE video
+- **End card** — `AGH` logo + "This entire video was made using AGH Creative Suite" + `aghcloud.ai` (6s close)
+
+The automated `demo_creative_suite.sh` applies all four via FFmpeg `drawtext`. For manual Kdenlive edits, add a PNG logo overlay track spanning the full timeline.
+
+---
+
+## Automated Version (one command)
+
+The manual steps above are automated end-to-end in `demo_creative_suite.sh`:
+
+```bash
+wget -qO demo_creative_suite.sh https://raw.githubusercontent.com/niksresearch/agh-installations/main/demo_creative_suite.sh && sudo bash demo_creative_suite.sh
+tail -f <DATA_DIR>/agh-promo/demo.log   # clean progress
+```
+
+**Reliable concat:** clips come from different sources (cards, Blender, Wan2.1) with different codec/fps/SAR. Naive `ffmpeg -f concat` fails silently. The script normalizes every segment to 1280x720 @ 24fps yuv420p MPEG-TS first, then concats TS (forgiving), then adds watermark + music in a final pass. This is why the final video reliably appears.
 
 ---
 
@@ -416,11 +443,11 @@ Every tool in the suite contributed to this video:
 
 | Contribution | Tool |
 |---|---|
-| All 6 brand images | **Fooocus** |
-| 3 cinematic video clips | **Wan2.1** |
-| AGH logo 3D reveal | **Blender** |
+| Brand images | **ComfyUI** (port 8188, FLUX/SD) |
+| Cinematic video clips | **Wan2.1** |
+| AGH logo 3D reveal | **Blender** (headless EEVEE) |
 | Background music | **MusicGen** |
-| Final edit + text + grade | **Kdenlive** |
+| Branding + assembly | **FFmpeg** (auto) / **Kdenlive** (manual) |
 
 **The story:** We used AGH Creative Suite to promote AGH Creative Suite.  
 No agency. No Adobe. No subscriptions. One GPU. One hour.

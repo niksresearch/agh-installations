@@ -231,7 +231,7 @@ show_custom_menu() {
 
 # ── App selection — Tier 1 bundle picker ─────────────────────────────────────
 echo ""
-echo -e "${BOLD}Always installed:${NC} GIMP, Krita, Kdenlive, Audacity, Inkscape, ComfyUI, FFmpeg, Blender, WhisperX"
+echo -e "${BOLD}Always installed:${NC} GIMP, Krita, Kdenlive, Audacity, Inkscape, ComfyUI, FFmpeg, Blender, WhisperX, MusicGen"
 echo ""
 echo -e "${BOLD}Select a package:${NC}"
 echo ""
@@ -504,14 +504,25 @@ git clone https://github.com/hzwer/ECCV2022-RIFE /opt/RIFE 2>/dev/null || true
 }
 
 install_musicgen() {
-  info "Installing MusicGen + Demucs (~5.5GB)..."
+  info "Installing MusicGen + Demucs (~5.5GB + model preload)..."
   nsenter -t "${POD_PID}" -m -- bash -c "
+export DEBIAN_FRONTEND=noninteractive
+# PyAV (audiocraft dep) builds from source — needs ffmpeg dev libs + pkg-config
+apt-get install -y --no-install-recommends \
+  pkg-config libavformat-dev libavcodec-dev libavdevice-dev \
+  libavutil-dev libavfilter-dev libswscale-dev libswresample-dev 2>/dev/null
 python3 -m venv /opt/audio-env
 source /opt/audio-env/bin/activate
+pip install --quiet wheel setuptools
 pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 pip install --quiet audiocraft
 pip install --quiet demucs
-" && success "MusicGen + Demucs installed." || warn "Audio tools install failed."
+# audiocraft pins torch 2.1 — force-compatible transformers + numpy (else T5 fails / numpy 2.x crash)
+pip install --quiet 'numpy<2' 'transformers==4.40.0'
+# Preload melody model so first generation is instant (cached to ${MODELS_DIR})
+export HF_HOME=${MODELS_DIR}/hf-cache
+python -c 'from audiocraft.models import MusicGen; MusicGen.get_pretrained(\"melody\"); print(\"MusicGen model cached\")' 2>/dev/null || true
+" && success "MusicGen + Demucs installed (model preloaded)." || warn "Audio tools install failed."
 }
 
 install_bark() {
@@ -650,6 +661,11 @@ WFEOF
 " && success "ComfyUI installed at /opt/ComfyUI." || warn "ComfyUI install failed."
 
 info "ComfyUI handles image generation on port 8188 — no separate image UI needed."
+
+# MusicGen always installed (every bundle) — audio is a core creative capability
+install_musicgen
+# Avoid re-installing if a bundle also listed it
+SELECTED_APPS="$(echo "$SELECTED_APPS" | sed 's/\bmusicgen\b//g' | tr -s ' ' | sed 's/^ //;s/ $//')"
 
 # ── Phase 4: Selected apps ────────────────────────────────────────────────────
 step "Phase 4/5: Installing selected apps"

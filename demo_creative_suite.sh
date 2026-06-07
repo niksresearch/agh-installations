@@ -155,8 +155,8 @@ make_card() {
   nsenter -t "${POD_PID}" -m -- bash -c "
 ffmpeg -y -loglevel error \
   -f lavfi -i color=c=${bg}:size=1280x720:duration=${dur}:rate=24 \
-  -vf \"drawtext=text='${title}':fontsize=54:fontcolor=${fg}:x=(w-text_w)/2:y=(h-text_h)/2-50:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf,drawtext=text='${subtitle}':fontsize=26:fontcolor=#${accent}:x=(w-text_w)/2:y=(h-text_h)/2+30:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf\" \
-  -c:v libx264 -preset fast -crf 20 '${out}'
+  -vf \"drawtext=text='${title}':fontsize=54:fontcolor=${fg}:x=(w-text_w)/2:y=(h-text_h)/2-50:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf,drawtext=text='${subtitle}':fontsize=26:fontcolor=#${accent}:x=(w-text_w)/2:y=(h-text_h)/2+30:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf,drawtext=text='AGH':fontsize=24:fontcolor=white@0.8:x=w-tw-28:y=24:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf\" \
+  -c:v libx264 -preset fast -crf 20 -pix_fmt yuv420p '${out}'
 " 2>/dev/null
 }
 
@@ -447,6 +447,25 @@ fi
 # ── Step 5: Background music via MusicGen ─────────────────────────────────────
 step "Step 5/6: Background music (MusicGen)"
 
+# Self-install MusicGen if not present (Starter bundle doesn't include it)
+if [[ "$HAS_MUSICGEN" != "true" ]]; then
+  info "MusicGen not installed — installing now (~5GB, one-time)..."
+  cmd "pip install audiocraft  # AI music generation"
+  nsenter -t "${POD_PID}" -m -- bash -c "
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y --no-install-recommends \
+  pkg-config libavformat-dev libavcodec-dev libavdevice-dev \
+  libavutil-dev libavfilter-dev libswscale-dev libswresample-dev 2>/dev/null
+python3 -m venv /opt/audio-env 2>/dev/null || true
+source /opt/audio-env/bin/activate
+pip install --quiet wheel setuptools
+pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install --quiet audiocraft
+pip install --quiet 'numpy<2' 'transformers==4.40.0'
+python -c 'from audiocraft.models import MusicGen' 2>/dev/null
+" && { HAS_MUSICGEN=true; success "MusicGen installed."; } || warn "MusicGen install failed — final video will have no music."
+fi
+
 if [[ "$HAS_MUSICGEN" == "true" ]]; then
   cmd "python -c 'MusicGen.get_pretrained(melody).generate([epic cinematic...])'  # 90s custom track"
   info "This demonstrates: AI music generation — custom track, no licensing fees, generated on demand"
@@ -470,55 +489,111 @@ PYEOF
 fi
 
 # ── Step 6: Section cards + final assembly ────────────────────────────────────
-step "Step 6/6: Assembly"
+step "Step 6/6: Branding + Final Assembly"
 
-# Section cards
+FONT_BOLD="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT_REG="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+# ── Branded title card with large AGH logo ────────────────────────────────────
+info "Building branded title + section cards..."
+nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error \
+  -f lavfi -i color=c=0x05060a:size=1280x720:duration=5:rate=24 \
+  -vf \"
+    drawtext=text='AGH':fontsize=140:fontcolor=0x58a6ff:x=(w-text_w)/2:y=(h-text_h)/2-80:font=DejaVu Sans:fontfile=${FONT_BOLD},
+    drawtext=text='CREATIVE SUITE':fontsize=34:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2+60:fontfile=${FONT_REG},
+    drawtext=text='Your GPU. Your Canvas. No Limits.':fontsize=22:fontcolor=0x00ccff:x=(w-text_w)/2:y=(h-text_h)/2+120:fontfile=${FONT_REG}
+  \" \
+  -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p ${OUTPUT_DIR}/s1_title.mp4
+" && success "Branded title card done." || warn "Title card failed."
+
+# Section label cards (only if that segment exists)
 [[ -f "${OUTPUT_DIR}/s2_images.mp4" ]] && \
-  make_card "${OUTPUT_DIR}/card_images.mp4" 2 "AI Image Generation" "Unlimited · No Credits · No Watermarks" "0x001a0a" "white" "00ff88"
+  make_card "${OUTPUT_DIR}/card_images.mp4" 2.5 "AI Image Generation" "Unlimited · No Credits · No Watermarks" "0x001a0a" "white" "00ff88"
 [[ -f "${OUTPUT_DIR}/s3_logo.mp4" ]] && \
-  make_card "${OUTPUT_DIR}/card_3d.mp4" 2 "3D Animation" "Blender — Real-time GPU Render" "0x050020" "white" "8833ff"
+  make_card "${OUTPUT_DIR}/card_3d.mp4" 2.5 "3D Animation" "Blender — Real-time GPU Render" "0x050020" "white" "8833ff"
 [[ -f "${OUTPUT_DIR}/s4_video.mp4" ]] && \
-  make_card "${OUTPUT_DIR}/card_video.mp4" 2 "AI Video Generation" "Wan2.1 — No Time Limits" "0x1a0500" "white" "ff6600"
+  make_card "${OUTPUT_DIR}/card_video.mp4" 2.5 "AI Video Generation" "Wan2.1 — No Time Limits" "0x1a0500" "white" "ff6600"
 
-# End card with tagline
-PORTAL_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' /tmp/cf-tunnel-portal.log 2>/dev/null | head -1 || echo "aghcloud.ai")
-make_card "${OUTPUT_DIR}/card_end.mp4" 6 \
-  "AGH Creative Suite" "This video was made using AGH Creative Suite" \
-  "0x000a1a" "white" "00ccff"
+# Branded end card
+nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error \
+  -f lavfi -i color=c=0x05060a:size=1280x720:duration=6:rate=24 \
+  -vf \"
+    drawtext=text='AGH':fontsize=110:fontcolor=0x58a6ff:x=(w-text_w)/2:y=(h-text_h)/2-100:fontfile=${FONT_BOLD},
+    drawtext=text='CREATIVE SUITE':fontsize=28:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2-10:fontfile=${FONT_REG},
+    drawtext=text='This entire video was made using AGH Creative Suite':fontsize=20:fontcolor=0x00ccff:x=(w-text_w)/2:y=(h-text_h)/2+50:fontfile=${FONT_REG},
+    drawtext=text='aghcloud.ai':fontsize=18:fontcolor=0x8b949e:x=(w-text_w)/2:y=(h-text_h)/2+90:fontfile=${FONT_REG}
+  \" \
+  -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p ${OUTPUT_DIR}/card_end.mp4
+" && success "Branded end card done." || warn "End card failed."
 
-# Build concat list
-CONCAT="${OUTPUT_DIR}/concat.txt"
-> "${CONCAT}"
-echo "file '${OUTPUT_DIR}/s1_title.mp4'" >> "${CONCAT}"
-[[ -f "${OUTPUT_DIR}/card_images.mp4" ]] && echo "file '${OUTPUT_DIR}/card_images.mp4'" >> "${CONCAT}"
-[[ -f "${OUTPUT_DIR}/s2_images.mp4" ]]   && echo "file '${OUTPUT_DIR}/s2_images.mp4'" >> "${CONCAT}"
-[[ -f "${OUTPUT_DIR}/card_3d.mp4" ]]     && echo "file '${OUTPUT_DIR}/card_3d.mp4'" >> "${CONCAT}"
-[[ -f "${OUTPUT_DIR}/s3_logo.mp4" ]]     && echo "file '${OUTPUT_DIR}/s3_logo.mp4'" >> "${CONCAT}"
-[[ -f "${OUTPUT_DIR}/card_video.mp4" ]]  && echo "file '${OUTPUT_DIR}/card_video.mp4'" >> "${CONCAT}"
-[[ -f "${OUTPUT_DIR}/s4_video.mp4" ]]    && echo "file '${OUTPUT_DIR}/s4_video.mp4'" >> "${CONCAT}"
-[[ -f "${OUTPUT_DIR}/s4b_video.mp4" ]]   && echo "file '${OUTPUT_DIR}/s4b_video.mp4'" >> "${CONCAT}"
-echo "file '${OUTPUT_DIR}/card_end.mp4'" >> "${CONCAT}"
+# ── Normalize every segment to uniform spec (.ts) so concat never fails ────────
+# Different sources (cards/blender/wan2.1/slideshow) have different codec/fps/SAR.
+# Re-encode each to 1280x720 @ 24fps yuv420p as MPEG-TS — TS concat is bulletproof.
+info "Normalizing all segments to uniform format..."
+TS_LIST="${OUTPUT_DIR}/ts_list.txt"; > "${TS_LIST}"
+SEG_ORDER=(
+  "s1_title.mp4"
+  "card_images.mp4" "s2_images.mp4"
+  "card_3d.mp4"     "s3_logo.mp4"
+  "card_video.mp4"  "s4_video.mp4" "s4b_video.mp4"
+  "card_end.mp4"
+)
+ts_idx=0
+for seg in "${SEG_ORDER[@]}"; do
+  src="${OUTPUT_DIR}/${seg}"
+  [[ -f "$src" ]] || continue
+  ts="${OUTPUT_DIR}/seg_${ts_idx}.ts"
+  nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error -i '${src}' \
+  -vf 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,format=yuv420p' \
+  -c:v libx264 -preset fast -crf 20 -an \
+  -bsf:v h264_mp4toannexb -f mpegts '${ts}'
+" && { echo "file '${ts}'" >> "${TS_LIST}"; ts_idx=$((ts_idx+1)); } || warn "Normalize failed: ${seg}"
+done
+
+[[ "$ts_idx" -gt 0 ]] || { warn "No segments to assemble — aborting final."; }
 
 FINAL="${OUTPUT_DIR}/AGH_Creative_Suite_Promo.mp4"
 
-if [[ -f "${OUTPUT_DIR}/music.wav" ]]; then
-  nsenter -t "${POD_PID}" -m -- bash -c "
+if [[ "$ts_idx" -gt 0 ]]; then
+  info "Stitching ${ts_idx} segments + AGH watermark + music into final video..."
+  # AGH watermark persists in top-right corner across whole video
+  WATERMARK="drawtext=text='AGH':fontsize=30:fontcolor=white@0.85:x=w-tw-28:y=24:fontfile=${FONT_BOLD},drawtext=text='Creative Suite':fontsize=12:fontcolor=0x00ccff@0.85:x=w-tw-28:y=58:fontfile=${FONT_REG}"
+
+  if [[ -f "${OUTPUT_DIR}/music.wav" ]]; then
+    nsenter -t "${POD_PID}" -m -- bash -c "
 ffmpeg -y -loglevel error \
-  -f concat -safe 0 -i ${CONCAT} \
+  -f concat -safe 0 -i ${TS_LIST} \
   -i ${OUTPUT_DIR}/music.wav \
-  -filter_complex '[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1[v];[1:a]volume=0.35,afade=t=out:st=85:d=4[a]' \
+  -filter_complex '[0:v]${WATERMARK}[v];[1:a]volume=0.35[a]' \
   -map '[v]' -map '[a]' \
-  -c:v libx264 -preset fast -crf 18 -c:a aac -b:a 192k -shortest \
+  -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
+  -c:a aac -b:a 192k -shortest \
   ${FINAL}
-" && { success "Final promo with music: ${FINAL}"; show_output "FINAL PROMO VIDEO" "${FINAL}"; } || warn "Assembly failed."
-else
-  nsenter -t "${POD_PID}" -m -- bash -c "
+" && { success "FINAL promo (with music): ${FINAL}"; } || warn "Final assembly failed."
+  else
+    nsenter -t "${POD_PID}" -m -- bash -c "
 ffmpeg -y -loglevel error \
-  -f concat -safe 0 -i ${CONCAT} \
-  -vf 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1' \
-  -c:v libx264 -preset fast -crf 18 \
+  -f concat -safe 0 -i ${TS_LIST} \
+  -vf '${WATERMARK}' \
+  -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
   ${FINAL}
-" && { success "Final promo (no music): ${FINAL}"; show_output "FINAL PROMO VIDEO" "${FINAL}"; } || warn "Assembly failed."
+" && { success "FINAL promo (no music): ${FINAL}"; } || warn "Final assembly failed."
+  fi
+
+  # Cleanup intermediate TS files
+  rm -f "${OUTPUT_DIR}"/seg_*.ts 2>/dev/null || true
+fi
+
+# Always surface the final video prominently
+if [[ -f "${FINAL}" ]]; then
+  ulog ""
+  ulog "  ★★★  FINAL PROMO VIDEO READY  ★★★"
+  show_output "FINAL PROMO VIDEO" "${FINAL}"
+else
+  warn "No final video produced — check ${DEBUG_LOG}"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
