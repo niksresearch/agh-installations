@@ -113,7 +113,7 @@ GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head 
 HAS_WAN21=false;    [[ -d /opt/Wan2.1 && -d "${MODELS_DIR}/wan21" ]] && HAS_WAN21=true
 HAS_MUSICGEN=false; nsenter -t "${POD_PID}" -m -- bash -c "source /opt/audio-env/bin/activate 2>/dev/null && python -c 'import audiocraft' 2>/dev/null" && HAS_MUSICGEN=true || true
 HAS_BLENDER=false;  nsenter -t "${POD_PID}" -m -- bash -c "command -v blender" &>/dev/null && HAS_BLENDER=true || true
-HAS_DIFFUSERS=false; nsenter -t "${POD_PID}" -m -- bash -c "source /opt/comfyui-env/bin/activate 2>/dev/null && python -c 'import diffusers, torch' 2>/dev/null" && HAS_DIFFUSERS=true || true
+HAS_DIFFUSERS=false  # Image generation via ComfyUI (port 8188) — not included in auto-demo
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"
@@ -219,7 +219,7 @@ PYEOF
   info "This demonstrates: AI image generation — unlimited, no credits, no watermarks"
   nsenter -t "${POD_PID}" -m -- bash -c "
 echo '${IMG_B64}' | base64 -d > /tmp/agh_promo_images.py
-source /opt/comfyui-env/bin/activate
+source /opt/imageui-env/bin/activate
 TMPDIR=${TMPDIR} python /tmp/agh_promo_images.py ${OUTPUT_DIR}/images 2>&1 | tail -20
 " && { success "Brand images generated."; show_output "AI Images" "${OUTPUT_DIR}/images"; } || warn "Image generation failed — skipping slideshow."
 

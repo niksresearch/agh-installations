@@ -637,6 +637,7 @@ pip install --quiet huggingface_hub
 git clone https://github.com/comfyanonymous/ComfyUI /opt/ComfyUI 2>/dev/null || \
   (cd /opt/ComfyUI && git pull)
 pip install --quiet -r /opt/ComfyUI/requirements.txt
+pip install --quiet gradio diffusers transformers accelerate
 mkdir -p ${MODELS_DIR}/comfyui/{checkpoints,loras,vae,clip,unet,controlnet,upscale_models}
 rm -rf /opt/ComfyUI/models
 ln -sfn ${MODELS_DIR}/comfyui /opt/ComfyUI/models
@@ -648,19 +649,7 @@ cat > '/opt/ComfyUI/user/default/workflows/wan21_t2v.json' << 'WFEOF'
 WFEOF
 " && success "ComfyUI installed at /opt/ComfyUI." || warn "ComfyUI install failed."
 
-info "Installing Fooocus (Midjourney-style image UI on port 7865)..."
-nsenter -t "${POD_PID}" -m -- bash -c "
-git clone https://github.com/lllyasviel/Fooocus /opt/Fooocus 2>/dev/null || \
-  (cd /opt/Fooocus && git pull)
-python3 -m venv /opt/fooocus-env
-source /opt/fooocus-env/bin/activate
-pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install --quiet -r /opt/Fooocus/requirements_versions.txt
-mkdir -p ${MODELS_DIR}/fooocus
-# Point Fooocus model dir to data disk
-sed -i 's|path_checkpoints.*|path_checkpoints = \"${MODELS_DIR}/fooocus/checkpoints\"|' \
-  /opt/Fooocus/fooocus/config.py 2>/dev/null || true
-" && success "Fooocus installed on port 7865." || warn "Fooocus install failed."
+info "ComfyUI handles image generation on port 8188 — no separate image UI needed."
 
 # ── Phase 4: Selected apps ────────────────────────────────────────────────────
 step "Phase 4/5: Installing selected apps"
@@ -751,17 +740,7 @@ TMPDIR=${TMPDIR_OVERRIDE} nohup python main.py --listen 0.0.0.0 --port 8188 --cu
   SERVICE_NAMES[comfyui]="ComfyUI — Advanced AI Workflows"
 fi
 
-# Fooocus on port 7865 (always installed)
-if [[ -d /opt/Fooocus ]]; then
-  nsenter -t "${POD_PID}" -m -- bash -c "
-source /opt/fooocus-env/bin/activate
-cd /opt/Fooocus
-TMPDIR=${TMPDIR_OVERRIDE} nohup python launch.py --listen --port 7865 \
-  > ${DATA_DIR}/fooocus.log 2>&1 &
-" && success "Fooocus starting on port 7865." || warn "Fooocus start failed."
-  SERVICE_PORTS[fooocus]=7865
-  SERVICE_NAMES[fooocus]="Fooocus — Midjourney-Style Image Generator"
-fi
+# Image generation handled by ComfyUI on port 8188
 
 # Wan2.1 Gradio UI on port 7870
 if [[ -d /opt/Wan2.1 ]]; then
@@ -813,7 +792,6 @@ fi
 
 PORTAL_ROWS=""
 PORTAL_ROWS+="<tr><td>🖥️</td><td><strong>XFCE Desktop</strong></td><td><a href='http://localhost:6080/vnc.html' target='_blank'>http://localhost:6080/vnc.html</a></td><td>Full Linux desktop</td></tr>"
-[[ -n "${SERVICE_PORTS[fooocus]:-}" ]]  && PORTAL_ROWS+="<tr><td>🎨</td><td><strong>Fooocus</strong></td><td><a href='http://localhost:${SERVICE_PORTS[fooocus]}' target='_blank'>http://localhost:${SERVICE_PORTS[fooocus]}</a></td><td>Midjourney-style image generation</td></tr>"
 [[ -n "${SERVICE_PORTS[wan21]:-}" ]]    && PORTAL_ROWS+="<tr><td>🎬</td><td><strong>Wan2.1 Video</strong></td><td><a href='http://localhost:${SERVICE_PORTS[wan21]}' target='_blank'>http://localhost:${SERVICE_PORTS[wan21]}</a></td><td>AI video — no time limits</td></tr>"
 [[ -n "${SERVICE_PORTS[comfyui]:-}" ]]  && PORTAL_ROWS+="<tr><td>⚙️</td><td><strong>ComfyUI</strong></td><td><a href='http://localhost:${SERVICE_PORTS[comfyui]}' target='_blank'>http://localhost:${SERVICE_PORTS[comfyui]}</a></td><td>Advanced AI workflow editor</td></tr>"
 [[ -n "${SERVICE_PORTS[a1111]:-}" ]]    && PORTAL_ROWS+="<tr><td>🖼️</td><td><strong>Stable Diffusion</strong></td><td><a href='http://localhost:${SERVICE_PORTS[a1111]}' target='_blank'>http://localhost:${SERVICE_PORTS[a1111]}</a></td><td>Full SD ecosystem</td></tr>"
@@ -915,7 +893,6 @@ start_tunnel "portal"  9080
 start_tunnel "desktop" 6080
 
 # Tunnel each running service
-[[ -n "${SERVICE_PORTS[fooocus]:-}" ]]  && start_tunnel "fooocus"  "${SERVICE_PORTS[fooocus]}"
 [[ -n "${SERVICE_PORTS[wan21]:-}" ]]    && start_tunnel "wan21"    "${SERVICE_PORTS[wan21]}"
 [[ -n "${SERVICE_PORTS[comfyui]:-}" ]]  && start_tunnel "comfyui"  "${SERVICE_PORTS[comfyui]}"
 [[ -n "${SERVICE_PORTS[a1111]:-}" ]]    && start_tunnel "a1111"    "${SERVICE_PORTS[a1111]}"
@@ -951,7 +928,6 @@ echo ""
 echo -e "${BOLD}${GREEN}── Public URLs (shareable, no SSH needed) ───────────────────${NC}"
 [[ -n "${TUNNEL_URLS[portal]:-}" ]]   && echo -e "  ${GREEN}${BOLD}Portal:${NC}            ${TUNNEL_URLS[portal]}"
 [[ -n "${TUNNEL_URLS[desktop]:-}" ]]  && echo -e "  ${GREEN}Desktop:${NC}           ${TUNNEL_URLS[desktop]}/vnc.html  ${YELLOW}(password protected)${NC}"
-[[ -n "${TUNNEL_URLS[fooocus]:-}" ]]  && echo -e "  ${GREEN}Fooocus:${NC}           ${TUNNEL_URLS[fooocus]}"
 [[ -n "${TUNNEL_URLS[wan21]:-}" ]]    && echo -e "  ${GREEN}Wan2.1 Video:${NC}      ${TUNNEL_URLS[wan21]}"
 [[ -n "${TUNNEL_URLS[comfyui]:-}" ]]  && echo -e "  ${GREEN}ComfyUI:${NC}           ${TUNNEL_URLS[comfyui]}"
 [[ -n "${TUNNEL_URLS[a1111]:-}" ]]    && echo -e "  ${GREEN}Stable Diffusion:${NC}  ${TUNNEL_URLS[a1111]}"
