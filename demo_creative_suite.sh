@@ -27,10 +27,13 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 STEP_START=0
 SERVER_IP_CACHE=""
 
-info()    { echo "[$(date '+%H:%M:%S')] [INFO]   $*"; }
-success() { echo "[$(date '+%H:%M:%S')] [OK]     $*"; }
-warn()    { echo "[$(date '+%H:%M:%S')] [WARN]   $*"; }
-cmd()     { echo "[$(date '+%H:%M:%S')] [CMD]    $ $*"; }
+# ulog: write to user log (FD 3) AND debug log (stdout, already redirected)
+ulog() { echo "$*" >&3; echo "$*"; }
+
+info()    { ulog "[$(date '+%H:%M:%S')] •  $*"; }
+success() { ulog "[$(date '+%H:%M:%S')] ✓  $*"; }
+warn()    { ulog "[$(date '+%H:%M:%S')] ⚠  $*"; }
+cmd()     { ulog "[$(date '+%H:%M:%S')]    \$ $*"; }
 
 show_output() {
   local label="$1"; shift
@@ -41,14 +44,14 @@ show_output() {
   for k in ~/.ssh/id_rsa ~/.ssh/id_ed25519 /root/.ssh/id_rsa /root/.ssh/id_ed25519; do
     [[ -f "$k" ]] && key_arg="-i ${k} " && break
   done
-  echo "[$(date '+%H:%M:%S')] [OUTPUT] ${label}:"
+  ulog "[$(date '+%H:%M:%S')] 📁 ${label} — ready to download:"
   for f in "${files[@]}"; do
     if [[ -f "$f" ]]; then
-      echo "[$(date '+%H:%M:%S')] [OUTPUT]   Path: ${f}  ($(du -sh $f 2>/dev/null | cut -f1))"
-      echo "[$(date '+%H:%M:%S')] [OUTPUT]   Download: scp ${key_arg}shadeform@${SERVER_IP_CACHE}:${f} ~/Desktop/"
+      ulog "[$(date '+%H:%M:%S')]    ${f}  ($(du -sh $f 2>/dev/null | cut -f1))"
+      ulog "[$(date '+%H:%M:%S')]    scp ${key_arg}shadeform@${SERVER_IP_CACHE}:${f} ~/Desktop/"
     elif [[ -d "$f" ]]; then
-      echo "[$(date '+%H:%M:%S')] [OUTPUT]   Dir:  ${f}/"
-      echo "[$(date '+%H:%M:%S')] [OUTPUT]   Download: scp ${key_arg}-r shadeform@${SERVER_IP_CACHE}:${f}/ ~/Desktop/$(basename $f)/"
+      ulog "[$(date '+%H:%M:%S')]    ${f}/"
+      ulog "[$(date '+%H:%M:%S')]    scp ${key_arg}-r shadeform@${SERVER_IP_CACHE}:${f}/ ~/Desktop/$(basename $f)/"
     fi
   done
 }
@@ -58,13 +61,13 @@ step() {
   now=$(date +%s)
   if [[ "$STEP_START" -gt 0 ]]; then
     local elapsed=$(( now - STEP_START ))
-    echo "[$(date '+%H:%M:%S')] [TIME]   Previous step took ${elapsed}s"
+    ulog "[$(date '+%H:%M:%S')]    (took ${elapsed}s)"
   fi
   STEP_START=$now
-  echo ""
-  echo "[$(date '+%H:%M:%S')] ════════════════════════════════════════════"
-  echo "[$(date '+%H:%M:%S')] STEP: $*"
-  echo "[$(date '+%H:%M:%S')] ════════════════════════════════════════════"
+  ulog ""
+  ulog "[$(date '+%H:%M:%S')] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  ulog "[$(date '+%H:%M:%S')] $*"
+  ulog "[$(date '+%H:%M:%S')] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
 [[ $EUID -eq 0 ]] || { echo -e "${RED}[ERROR]${NC} Run as root: sudo bash $0"; exit 1; }
@@ -92,17 +95,28 @@ export TMPDIR="${TMPDIR:-${DATA_DIR}/tmp}"
 
 OUTPUT_DIR="${DATA_DIR}/agh-promo"
 LOG_FILE="${OUTPUT_DIR}/demo.log"
+DEBUG_LOG="${OUTPUT_DIR}/demo-debug.log"
 mkdir -p "${OUTPUT_DIR}/images" "${OUTPUT_DIR}/videos" "${DATA_DIR}/tmp"
 
-# Re-exec with logging if not already logging
+# Re-exec into background if not already logging
 if [[ "${DEMO_LOGGING:-0}" != "1" ]]; then
   export DEMO_LOGGING=1
-  echo "Starting demo. Log: ${LOG_FILE}"
-  exec sudo DEMO_LOGGING=1 nohup bash "$0" >> "${LOG_FILE}" 2>&1 &
-  echo "Demo PID: $!"
-  echo "Watch: tail -f ${LOG_FILE}"
+  echo ""
+  echo "  AGH Creative Suite — Demo starting in background"
+  echo ""
+  echo "  Clean progress:  tail -f ${LOG_FILE}"
+  echo "  Full debug log:  tail -f ${DEBUG_LOG}"
+  echo ""
+  exec sudo DEMO_LOGGING=1 nohup bash "$0" &
+  echo "  PID: $!"
   exit 0
 fi
+
+# Two-stream logging:
+#   FD 3        → user log  (clean: steps, status, downloads)
+#   stdout+err  → debug log (all command noise: ffmpeg, blender, python)
+exec 3>>"${LOG_FILE}"
+exec >>"${DEBUG_LOG}" 2>&1
 
 POD_PID=$(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}' | head -1)
 [[ -n "$POD_PID" ]] || { echo -e "${RED}[ERROR]${NC} Pod not running. Run setup_creative_suite.sh first."; exit 1; }
@@ -115,26 +129,25 @@ HAS_MUSICGEN=false; nsenter -t "${POD_PID}" -m -- bash -c "source /opt/audio-env
 HAS_BLENDER=false;  nsenter -t "${POD_PID}" -m -- bash -c "command -v blender" &>/dev/null && HAS_BLENDER=true || true
 HAS_DIFFUSERS=false  # Image generation via ComfyUI (port 8188) — not included in auto-demo
 
-echo ""
-echo "════════════════════════════════════════════════════════════════"
-echo "  AGH Creative Suite — Promo Video Generator"
-echo "  Made using the suite it promotes"
-echo "════════════════════════════════════════════════════════════════"
-echo ""
-echo "  DISCLAIMER: All commands below run automatically."
-echo "  This demonstrates the full capability of AGH Creative Suite"
-echo "  — AI image generation, AI video, 3D animation, music, and"
-echo "  final video editing — executed end-to-end without human input."
-echo ""
-echo "  GPU:     ${GPU_NAME}"
-echo "  Started: $(date '+%Y-%m-%d %H:%M:%S')"
-echo "  Log:     ${DATA_DIR}/demo.log"
-echo "════════════════════════════════════════════════════════════════"
-echo ""
-info "GPU:        ${GPU_NAME}"
-info "Output:     ${OUTPUT_DIR}"
-info "Blender:    ${HAS_BLENDER} | Wan2.1: ${HAS_WAN21} | MusicGen: ${HAS_MUSICGEN} | Diffusers: ${HAS_DIFFUSERS}"
-echo ""
+ulog "════════════════════════════════════════════════════════════════"
+ulog "  AGH Creative Suite — Promo Video Generator"
+ulog "  Made using the suite it promotes"
+ulog "════════════════════════════════════════════════════════════════"
+ulog ""
+ulog "  Every step below runs automatically — no human input."
+ulog "  This IS the product demonstrating itself: AI video, 3D"
+ulog "  animation, music, and editing, end to end."
+ulog ""
+ulog "  GPU:      ${GPU_NAME}"
+ulog "  Started:  $(date '+%Y-%m-%d %H:%M:%S')"
+ulog "  Outputs:  ${OUTPUT_DIR}/"
+ulog ""
+ulog "  Tools detected:"
+ulog "    Blender (3D):   ${HAS_BLENDER}"
+ulog "    Wan2.1 (video): ${HAS_WAN21}"
+ulog "    MusicGen:       ${HAS_MUSICGEN}"
+ulog "════════════════════════════════════════════════════════════════"
+ulog ""
 
 # ── Helper: title/section card via FFmpeg ─────────────────────────────────────
 make_card() {
@@ -154,100 +167,92 @@ make_card "${OUTPUT_DIR}/s1_title.mp4" 4 \
   "0x000a1a" "white" "00ccff"
 success "Title card done."
 
-# ── Step 2: AI brand images via diffusers ─────────────────────────────────────
-step "Step 2/6: AI brand images"
+# ── Step 2: AI brand images via ComfyUI API ───────────────────────────────────
+step "Step 2/6: AI brand images (ComfyUI API)"
 
-if [[ "$HAS_DIFFUSERS" == "true" ]]; then
-  cat > /tmp/agh_promo_images.py << 'PYEOF'
-import torch, os, sys
-from diffusers import StableDiffusionPipeline
+COMFYUI_URL="http://127.0.0.1:8188"
 
-out_dir = sys.argv[1]
-tmpdir  = os.environ.get("TMPDIR", "/tmp")
-
-# Check if FLUX schnell available, fall back to SD 1.5
-flux_path = "/opt/ComfyUI/models/unet/flux1-schnell.safetensors"
-use_sd15 = not os.path.exists(flux_path)
-
-prompts = [
-    ("agh_workstation",
-     "A sleek futuristic AI creative workstation glowing with blue and purple light, "
-     "multiple holographic screens showing AI-generated artwork, dark minimal setup, "
-     "cinematic lighting, ultra detailed, 8K, concept art style"),
-    ("agh_creator_after",
-     "A confident creative professional in front of multiple screens showing stunning "
-     "AI-generated videos and images, golden hour light, inspired expression, "
-     "cinematic, aspirational lifestyle photography"),
-    ("agh_gpu_power",
-     "An H100 GPU chip glowing with neon blue light, futuristic close-up macro shot, "
-     "cinematic dramatic lighting, chrome and silicon textures, tech product photography"),
-    ("agh_abstract_ai",
-     "Abstract visualization of artificial intelligence creativity, flowing neural "
-     "networks forming into beautiful art pieces, electric blue and purple particles, "
-     "deep space background, photorealistic digital art, 8K"),
-    ("agh_creator_before",
-     "A frustrated graphic designer staring at laptop showing paywall credits exhausted "
-     "message, dark moody lighting, editorial photography style, cinematic color grade"),
-    ("agh_brand",
-     "The letters AGH formed from glowing light particles and energy trails against "
-     "dark background, futuristic logo style, electric blue and cyan, cinematic 8K"),
-]
-
-pipe = StableDiffusionPipeline.from_pretrained(
-    "runwayml/stable-diffusion-v1-5",
-    torch_dtype=torch.float16,
-    safety_checker=None,
-).to("cuda")
-pipe.enable_attention_slicing()
-
-for name, prompt in prompts:
-    path = os.path.join(out_dir, f"{name}.png")
-    if os.path.exists(path):
-        print(f"Already exists: {path}")
-        continue
-    print(f"Generating: {name}...")
-    img = pipe(prompt, height=720, width=1280,
-               num_inference_steps=30, guidance_scale=7.5).images[0]
-    img.save(path)
-    print(f"Saved: {path}")
-
-print("IMAGES_DONE")
-PYEOF
-
-  IMG_B64=$(base64 -w0 /tmp/agh_promo_images.py)
-  cmd "python agh_promo_images.py  # generating 6 brand images via Stable Diffusion"
+# Check ComfyUI is running
+if curl -s --connect-timeout 3 "${COMFYUI_URL}/system_stats" &>/dev/null; then
+  cmd "curl -X POST ${COMFYUI_URL}/prompt  # submitting image generation via ComfyUI API"
   info "This demonstrates: AI image generation — unlimited, no credits, no watermarks"
-  nsenter -t "${POD_PID}" -m -- bash -c "
-echo '${IMG_B64}' | base64 -d > /tmp/agh_promo_images.py
-source /opt/imageui-env/bin/activate
-TMPDIR=${TMPDIR} python /tmp/agh_promo_images.py ${OUTPUT_DIR}/images 2>&1 | tail -20
-" && { success "Brand images generated."; show_output "AI Images" "${OUTPUT_DIR}/images"; } || warn "Image generation failed — skipping slideshow."
 
-  # Assemble image slideshow — convert each PNG to 3s clip, concat
+  PROMPTS=(
+    "agh_workstation|A sleek futuristic AI creative workstation glowing with blue and purple light, multiple holographic screens showing AI-generated artwork, dark minimal setup, cinematic lighting, ultra detailed"
+    "agh_creator|A confident creative professional in front of multiple screens showing stunning AI-generated videos and images, golden hour light, inspired expression, cinematic aspirational"
+    "agh_abstract_ai|Abstract visualization of artificial intelligence creativity, flowing neural networks forming beautiful art, electric blue and purple particles, deep space background, 8K"
+    "agh_gpu_power|An H100 GPU chip glowing with neon blue light, futuristic close-up macro shot, cinematic dramatic lighting, chrome and silicon textures"
+    "agh_brand|The letters AGH formed from glowing light particles and energy trails against dark background, futuristic logo, electric blue and cyan, cinematic 8K"
+    "agh_no_limits|A creative studio at night, screens glowing with AI-generated art, text NO LIMITS visible, inspiring atmosphere, cinematic wide shot"
+  )
+
+  for entry in "${PROMPTS[@]}"; do
+    name="${entry%%|*}"
+    prompt="${entry##*|}"
+    out_path="${OUTPUT_DIR}/images/${name}.png"
+    [[ -f "$out_path" ]] && { info "Already exists: ${name}.png"; continue; }
+
+    info "Generating: ${name}..."
+    # Submit workflow to ComfyUI
+    PROMPT_ID=$(curl -s -X POST "${COMFYUI_URL}/prompt" \
+      -H "Content-Type: application/json" \
+      -d "{\"prompt\":{\"1\":{\"class_type\":\"CheckpointLoaderSimple\",\"inputs\":{\"ckpt_name\":\"v1-5-pruned-emaonly.safetensors\"}},\"2\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"${prompt}\",\"clip\":[\"1\",1]}},\"3\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"blurry, ugly, watermark, low quality\",\"clip\":[\"1\",1]}},\"4\":{\"class_type\":\"EmptyLatentImage\",\"inputs\":{\"width\":1280,\"height\":720,\"batch_size\":1}},\"5\":{\"class_type\":\"KSampler\",\"inputs\":{\"model\":[\"1\",0],\"positive\":[\"2\",0],\"negative\":[\"3\",0],\"latent_image\":[\"4\",0],\"seed\":42,\"steps\":25,\"cfg\":7.5,\"sampler_name\":\"euler\",\"scheduler\":\"normal\",\"denoise\":1}},\"6\":{\"class_type\":\"VAEDecode\",\"inputs\":{\"samples\":[\"5\",0],\"vae\":[\"1\",2]}},\"7\":{\"class_type\":\"SaveImage\",\"inputs\":{\"images\":[\"6\",0],\"filename_prefix\":\"${name}\"}}}}" \
+      2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('prompt_id',''))" 2>/dev/null || echo "")
+
+    if [[ -z "$PROMPT_ID" ]]; then
+      warn "ComfyUI rejected prompt for ${name} — skipping"
+      continue
+    fi
+
+    # Wait for completion (up to 3 min per image)
+    for i in $(seq 1 36); do
+      sleep 5
+      STATUS=$(curl -s "${COMFYUI_URL}/history/${PROMPT_ID}" 2>/dev/null | \
+        python3 -c "import sys,json; d=json.load(sys.stdin); print('done' if d else 'waiting')" 2>/dev/null || echo "waiting")
+      [[ "$STATUS" == "done" ]] && break
+    done
+
+    # Download generated image from ComfyUI output
+    GENERATED=$(curl -s "${COMFYUI_URL}/history/${PROMPT_ID}" 2>/dev/null | \
+      python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for k,v in d.items():
+    imgs=v.get('outputs',{}).get('7',{}).get('images',[])
+    if imgs: print(imgs[0]['filename']); break
+" 2>/dev/null || echo "")
+
+    if [[ -n "$GENERATED" ]]; then
+      curl -s "${COMFYUI_URL}/view?filename=${GENERATED}&type=output" -o "${out_path}" 2>/dev/null
+      [[ -f "$out_path" ]] && success "Generated: ${name}.png" || warn "Download failed: ${name}"
+    else
+      warn "No output for ${name}"
+    fi
+  done
+
+  # Assemble slideshow from generated images
   if ls "${OUTPUT_DIR}/images"/*.png &>/dev/null 2>&1; then
-    info "Assembling slideshow..."
-    SLIDE_CONCAT="${OUTPUT_DIR}/slides_concat.txt"
-    > "${SLIDE_CONCAT}"
+    info "Assembling image slideshow..."
+    SLIDE_CONCAT="${OUTPUT_DIR}/slides_concat.txt"; > "${SLIDE_CONCAT}"
     n=0
     for img in "${OUTPUT_DIR}/images"/*.png; do
       clip="${OUTPUT_DIR}/slide_${n}.mp4"
       nsenter -t "${POD_PID}" -m -- bash -c "
 ffmpeg -y -loglevel error -loop 1 -t 3 -i '${img}' \
   -vf 'scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,setsar=1' \
-  -c:v libx264 -preset fast -crf 20 -r 24 '${clip}'
-" 2>/dev/null
+  -c:v libx264 -preset fast -crf 20 -r 24 '${clip}'" 2>/dev/null
       echo "file '${clip}'" >> "${SLIDE_CONCAT}"
       n=$((n+1))
     done
     nsenter -t "${POD_PID}" -m -- bash -c "
-ffmpeg -y -loglevel error \
-  -f concat -safe 0 -i '${SLIDE_CONCAT}' \
-  -c:v libx264 -preset fast -crf 20 \
-  '${OUTPUT_DIR}/s2_images.mp4'
-" && success "Image slideshow assembled (${n} images)." || warn "Slideshow failed."
+ffmpeg -y -loglevel error -f concat -safe 0 -i '${SLIDE_CONCAT}' \
+  -c:v libx264 -preset fast -crf 20 '${OUTPUT_DIR}/s2_images.mp4'"
+    success "Image slideshow assembled (${n} images)."
+    show_output "AI Images" "${OUTPUT_DIR}/images"
   fi
 else
-  warn "Diffusers not available — skipping AI images."
+  warn "ComfyUI not running on port 8188 — skipping AI images."
+  warn "Start ComfyUI first or run setup_creative_suite.sh"
 fi
 
 # ── Step 3: AGH logo 3D reveal via Blender ────────────────────────────────────
@@ -519,45 +524,29 @@ fi
 # ── Done ──────────────────────────────────────────────────────────────────────
 TOTAL_TIME=$(( $(date +%s) - STEP_START ))
 
-echo ""
-echo "════════════════════════════════════════════════════════════════"
-echo "  AGH Promo Video Complete!"
-echo "════════════════════════════════════════════════════════════════"
-echo ""
-echo "  Finished:  $(date '+%Y-%m-%d %H:%M:%S')"
-echo "  GPU used:  ${GPU_NAME}"
-echo ""
-echo "  WHAT JUST HAPPENED (automatically, zero human input):"
-echo "  ✓ 6 AI brand images generated    — Stable Diffusion"
-echo "  ✓ AGH logo 3D animation rendered — Blender EEVEE headless"
-echo "  ✓ 2 AI video clips generated     — Wan2.1 14B model"
-echo "  ✓ 90s background music created   — MusicGen"
-echo "  ✓ Final video assembled          — FFmpeg"
-echo ""
-echo "  Output:    ${FINAL}"
-[[ -f "${FINAL}" ]] && echo "  Size:      $(du -sh ${FINAL} | cut -f1)"
-echo ""
-
-# ── All generated assets with paths and sizes ─────────────────────────────────
-echo "  ALL GENERATED FILES:"
-echo "  ─────────────────────────────────────────────────"
-for f in \
-  "${OUTPUT_DIR}/images/"*.png \
-  "${OUTPUT_DIR}/videos/"*.mp4 \
-  "${OUTPUT_DIR}/s3_logo.mp4" \
-  "${OUTPUT_DIR}/music.wav" \
-  "${FINAL}"; do
-  [[ -f "$f" ]] && printf "  %-45s %s\n" "$f" "$(du -sh $f 2>/dev/null | cut -f1)"
-done
-echo "  ─────────────────────────────────────────────────"
-echo ""
+ulog ""
+ulog "════════════════════════════════════════════════════════════════"
+ulog "  AGH Promo Video Complete!"
+ulog "════════════════════════════════════════════════════════════════"
+ulog ""
+ulog "  Finished:  $(date '+%Y-%m-%d %H:%M:%S')"
+ulog "  GPU used:  ${GPU_NAME}"
+ulog ""
+ulog "  WHAT JUST HAPPENED (automatically, zero human input):"
+[[ -f "${OUTPUT_DIR}/s2_images.mp4" ]] && ulog "  ✓ AI brand images generated      — ComfyUI"
+[[ -f "${OUTPUT_DIR}/s3_logo.mp4" ]]   && ulog "  ✓ AGH logo 3D animation rendered — Blender EEVEE headless"
+[[ -f "${OUTPUT_DIR}/s4_video.mp4" ]]  && ulog "  ✓ AI video clips generated       — Wan2.1 14B model"
+[[ -f "${OUTPUT_DIR}/music.wav" ]]     && ulog "  ✓ Background music created        — MusicGen"
+[[ -f "${FINAL}" ]]                    && ulog "  ✓ Final video assembled          — FFmpeg"
+ulog ""
+ulog "  Output:    ${FINAL}"
+[[ -f "${FINAL}" ]] && ulog "  Size:      $(du -sh ${FINAL} | cut -f1)"
+ulog ""
 
 # ── Auto-detect server IP and build download commands ─────────────────────────
 SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || \
             curl -s --connect-timeout 5 api.ipify.org 2>/dev/null || \
             echo "YOUR_SERVER_IP")
-
-# Find SSH key (check common locations)
 SSH_KEY=""
 for k in ~/.ssh/id_rsa ~/.ssh/id_ed25519 /root/.ssh/id_rsa /root/.ssh/id_ed25519; do
   [[ -f "$k" ]] && SSH_KEY="$k" && break
@@ -565,24 +554,11 @@ done
 KEY_ARG=""
 [[ -n "$SSH_KEY" ]] && KEY_ARG="-i ${SSH_KEY} "
 
-echo "  DOWNLOAD TO YOUR LAPTOP:"
-echo "  (run these commands on your laptop, not the server)"
-echo ""
-echo "  # Final promo video:"
-echo "  scp ${KEY_ARG}shadeform@${SERVER_IP}:${FINAL} ~/Desktop/"
-echo ""
-echo "  # All images:"
-echo "  scp ${KEY_ARG}-r shadeform@${SERVER_IP}:${OUTPUT_DIR}/images/ ~/Desktop/agh-images/"
-echo ""
-echo "  # All videos:"
-echo "  scp ${KEY_ARG}-r shadeform@${SERVER_IP}:${OUTPUT_DIR}/videos/ ~/Desktop/agh-videos/"
-echo ""
-echo "  # Everything at once:"
-echo "  scp ${KEY_ARG}-r shadeform@${SERVER_IP}:${OUTPUT_DIR}/ ~/Desktop/agh-promo/"
-echo ""
-echo "  SERVER: ${SERVER_IP}"
-echo "  FILES:  ${OUTPUT_DIR}/"
-echo ""
-echo "  This video was made entirely using AGH Creative Suite."
-echo "  You are watching the product."
-echo ""
+ulog "  DOWNLOAD TO YOUR LAPTOP (run on your laptop):"
+ulog ""
+[[ -f "${FINAL}" ]] && ulog "  scp ${KEY_ARG}shadeform@${SERVER_IP}:${FINAL} ~/Desktop/"
+ulog "  scp ${KEY_ARG}-r shadeform@${SERVER_IP}:${OUTPUT_DIR}/ ~/Desktop/agh-promo/"
+ulog ""
+ulog "  This video was made entirely using AGH Creative Suite."
+ulog "  You are watching the product."
+ulog ""
