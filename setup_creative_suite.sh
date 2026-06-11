@@ -111,6 +111,12 @@ mount_data_disk
 mkdir -p "${MODELS_DIR}" "${APPS_DIR}" "${LOGS_DIR}" "${TMPDIR_OVERRIDE}"
 export TMPDIR="${TMPDIR_OVERRIDE}"
 
+# ── Non-interactive mode ──────────────────────────────────────────────────────
+# Unattended (Shadeform startup script / cloud-init) when BUNDLE env var is set.
+# Required env for unattended: BUNDLE (1-3) and VNC_PASS. HF_TOKEN optional.
+NONINTERACTIVE=0
+[[ -n "${BUNDLE:-}" ]] && NONINTERACTIVE=1
+
 # ── HuggingFace account setup ─────────────────────────────────────────────────
 HF_TOKEN_FILE="/root/.hf_token"
 FLUX_REPO=""
@@ -120,16 +126,23 @@ if [[ -z "${HF_TOKEN:-}" ]] && [[ -f "${HF_TOKEN_FILE}" ]]; then
   success "HuggingFace token loaded from saved file."
 fi
 
-if [[ -z "${HF_TOKEN:-}" ]]; then
+# Save env-provided token to file for reuse
+if [[ -n "${HF_TOKEN:-}" ]] && [[ ! -f "${HF_TOKEN_FILE}" ]]; then
+  echo "${HF_TOKEN}" > "${HF_TOKEN_FILE}"; chmod 600 "${HF_TOKEN_FILE}"
+fi
+
+if [[ -z "${HF_TOKEN:-}" ]] && [[ "${NONINTERACTIVE}" == "1" ]]; then
+  warn "No HF_TOKEN provided (unattended) — FLUX skipped, Stable Diffusion used for images."
+elif [[ -z "${HF_TOKEN:-}" ]]; then
   echo ""
   echo -e "${BOLD}HuggingFace Account Setup${NC}"
   echo -e "${CYAN}HuggingFace is used to download AI models (FLUX image generation etc.)${NC}"
   echo ""
-  echo -e "  ${CYAN}[1]${NC} ${BOLD}I have a HuggingFace account + token${NC}  — full model access (recommended)"
+  echo -e "  ${CYAN}[1]${NC} ${BOLD}I have a HuggingFace token${NC}  — adds FLUX (best image quality)"
   echo -e "         Free account works. Get token: https://huggingface.co/settings/tokens"
   echo ""
-  echo -e "  ${CYAN}[2]${NC} ${BOLD}Skip for now${NC}  — install everything except FLUX image models"
-  echo -e "         You can add FLUX later by re-running this script"
+  echo -e "  ${CYAN}[2]${NC} ${BOLD}Skip${NC}  — image generation still works (Stable Diffusion, no token)"
+  echo -e "         FLUX adds higher quality later — just re-run this script with a token"
   echo ""
   read -rp "$(echo -e "${BOLD}Choose [1-2]:${NC} ")" hf_choice
 
@@ -160,27 +173,36 @@ fi
 export HF_TOKEN="${HF_TOKEN:-}"
 
 # ── Password prompt ───────────────────────────────────────────────────────────
-echo ""
-echo -e "${BOLD}Set a password for the virtual desktop:${NC}"
-echo -e "${CYAN}(Minimum 6 characters — used to access the desktop from your browser)${NC}"
-echo ""
-VNC_PASS=""
-while true; do
-  read -rsp "$(echo -e "${BOLD}Password:${NC} ")" VNC_PASS
+if [[ -z "${VNC_PASS:-}" ]] && [[ "${NONINTERACTIVE}" == "1" ]]; then
+  error "Unattended mode (BUNDLE set) requires VNC_PASS env var (min 6 chars)."
+  exit 1
+fi
+if [[ -n "${VNC_PASS:-}" ]]; then
+  [[ ${#VNC_PASS} -ge 6 ]] || { error "VNC_PASS must be at least 6 characters."; exit 1; }
+  success "Desktop password taken from environment."
+else
   echo ""
-  if [[ ${#VNC_PASS} -lt 6 ]]; then
-    warn "Password must be at least 6 characters. Try again."
-    continue
-  fi
-  read -rsp "$(echo -e "${BOLD}Confirm password:${NC} ")" VNC_PASS2
+  echo -e "${BOLD}Set a password for the virtual desktop:${NC}"
+  echo -e "${CYAN}(Minimum 6 characters — used to access the desktop from your browser)${NC}"
   echo ""
-  if [[ "$VNC_PASS" == "$VNC_PASS2" ]]; then
-    break
-  else
-    warn "Passwords do not match. Try again."
-  fi
-done
-success "Password accepted."
+  VNC_PASS=""
+  while true; do
+    read -rsp "$(echo -e "${BOLD}Password:${NC} ")" VNC_PASS
+    echo ""
+    if [[ ${#VNC_PASS} -lt 6 ]]; then
+      warn "Password must be at least 6 characters. Try again."
+      continue
+    fi
+    read -rsp "$(echo -e "${BOLD}Confirm password:${NC} ")" VNC_PASS2
+    echo ""
+    if [[ "$VNC_PASS" == "$VNC_PASS2" ]]; then
+      break
+    else
+      warn "Passwords do not match. Try again."
+    fi
+  done
+  success "Password accepted."
+fi
 export VNC_PASS
 
 # ── App selection — Tier 2 custom checklist ───────────────────────────────────
@@ -230,33 +252,45 @@ show_custom_menu() {
 }
 
 # ── App selection — Tier 1 bundle picker ─────────────────────────────────────
-echo ""
-echo -e "${BOLD}Always installed:${NC} GIMP, Krita, Kdenlive, Audacity, Inkscape, ComfyUI, FFmpeg, Blender, WhisperX, MusicGen"
-echo ""
-echo -e "${BOLD}Select a package:${NC}"
-echo ""
-echo -e "  ${CYAN}[1]${NC} ${BOLD}Starter${NC}      Core tools + Wan2.1 + FLUX          (~40GB,  ~20min)"
-echo -e "         GIMP, Krita, Kdenlive, ComfyUI + FLUX model + Wan2.1 + Real-ESRGAN"
-echo ""
-echo -e "  ${CYAN}[2]${NC} ${BOLD}Creator${NC}      Starter + HunyuanVideo + Audio       (~140GB, ~60min)"
-echo -e "         Everything in Starter + HunyuanVideo + MusicGen + Bark TTS"
-echo ""
-echo -e "  ${CYAN}[3]${NC} ${BOLD}Full Suite${NC}   Everything                           (~170GB, ~90min)"
-echo -e "         All apps + all AI models"
-echo ""
-echo -e "  ${CYAN}[4]${NC} ${BOLD}Custom${NC}       Pick your own apps"
-echo ""
-
-while true; do
-  read -rp "$(echo -e "${BOLD}Enter choice [1-4]:${NC} ")" bundle_choice
-  case "$bundle_choice" in
-    1) SELECTED_APPS="flux wan21 esrgan"; break ;;
-    2) SELECTED_APPS="flux wan21 hunyuan musicgen bark esrgan"; break ;;
-    3) SELECTED_APPS="flux a1111 hunyuan wan21 ltx cogvideo esrgan musicgen bark devtools"; break ;;
-    4) show_custom_menu; break ;;
-    *) warn "Enter 1, 2, 3, or 4." ;;
+# Unattended: set BUNDLE=1|2|3 env var to skip the menu.
+pick_bundle() {
+  case "$1" in
+    1) SELECTED_APPS="flux wan21 esrgan" ;;
+    2) SELECTED_APPS="flux wan21 hunyuan musicgen bark esrgan" ;;
+    3) SELECTED_APPS="flux a1111 hunyuan wan21 ltx cogvideo esrgan musicgen bark devtools" ;;
+    *) return 1 ;;
   esac
-done
+}
+
+if [[ -n "${BUNDLE:-}" ]]; then
+  pick_bundle "${BUNDLE}" || { error "Invalid BUNDLE='${BUNDLE}' (use 1, 2, or 3)."; exit 1; }
+  success "Bundle ${BUNDLE} selected from environment."
+else
+  echo ""
+  echo -e "${BOLD}Always installed:${NC} GIMP, Krita, Kdenlive, Audacity, Inkscape, ComfyUI, FFmpeg, Blender, WhisperX, MusicGen"
+  echo ""
+  echo -e "${BOLD}Select a package:${NC}"
+  echo ""
+  echo -e "  ${CYAN}[1]${NC} ${BOLD}Starter${NC}      Core tools + Wan2.1 + FLUX          (~40GB,  ~20min)"
+  echo -e "         GIMP, Krita, Kdenlive, ComfyUI + FLUX model + Wan2.1 + Real-ESRGAN"
+  echo ""
+  echo -e "  ${CYAN}[2]${NC} ${BOLD}Creator${NC}      Starter + HunyuanVideo + Audio       (~140GB, ~60min)"
+  echo -e "         Everything in Starter + HunyuanVideo + MusicGen + Bark TTS"
+  echo ""
+  echo -e "  ${CYAN}[3]${NC} ${BOLD}Full Suite${NC}   Everything                           (~170GB, ~90min)"
+  echo -e "         All apps + all AI models"
+  echo ""
+  echo -e "  ${CYAN}[4]${NC} ${BOLD}Custom${NC}       Pick your own apps"
+  echo ""
+  while true; do
+    read -rp "$(echo -e "${BOLD}Enter choice [1-4]:${NC} ")" bundle_choice
+    case "$bundle_choice" in
+      1|2|3) pick_bundle "$bundle_choice"; break ;;
+      4) show_custom_menu; break ;;
+      *) warn "Enter 1, 2, 3, or 4." ;;
+    esac
+  done
+fi
 
 info "Selected: ${SELECTED_APPS:-core tools only}"
 
@@ -267,9 +301,15 @@ install_flux() {
   # Accept at https://huggingface.co/black-forest-labs/FLUX.1-schnell
   # Then get token at https://huggingface.co/settings/tokens
   # Pass as: HF_TOKEN=hf_xxx sudo bash setup_creative_suite.sh
-  FLUX_REPO="black-forest-labs/FLUX.1-schnell"
-  FLUX_FILE="flux1-schnell.safetensors"
-  info "Downloading FLUX.1-schnell model (~24GB)..."
+  # FLUX_VARIANT=dev for higher quality (gated, needs license); default schnell.
+  if [[ "${FLUX_VARIANT:-schnell}" == "dev" ]]; then
+    FLUX_REPO="black-forest-labs/FLUX.1-dev"
+    FLUX_FILE="flux1-dev.safetensors"
+  else
+    FLUX_REPO="black-forest-labs/FLUX.1-schnell"
+    FLUX_FILE="flux1-schnell.safetensors"
+  fi
+  info "Downloading FLUX model (${FLUX_REPO}, ~24GB)..."
   if [[ -z "${HF_TOKEN:-}" ]]; then
     warn "No HuggingFace token found. FLUX download will likely fail."
     warn "Re-run setup to enter your token."
@@ -304,25 +344,128 @@ source /opt/a1111-env/bin/activate
 pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 pip install --quiet -r /opt/stable-diffusion-webui/requirements.txt
 mkdir -p /opt/stable-diffusion-webui/models/Stable-diffusion
-hf download runwayml/stable-diffusion-v1-5 \
-  v1-5-pruned-emaonly.safetensors \
-  --local-dir /opt/stable-diffusion-webui/models/Stable-diffusion/ \
+# runwayml/stable-diffusion-v1-5 was deleted from HF — use the gateless Comfy-Org mirror
+wget -q -O /opt/stable-diffusion-webui/models/Stable-diffusion/v1-5-pruned-emaonly.safetensors \
+  https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly-fp16.safetensors
 " && success "A1111 installed." || warn "A1111 install failed."
 }
 
-install_hunyuan() {
-  info "Installing HunyuanVideo (~87GB — takes ~30 minutes)..."
+# AGH Video Studio — installs LTX-Video, CogVideoX-5B and HunyuanVideo together via
+# diffusers (clean, turnkey pipelines) into one shared venv, with a unified Gradio UI
+# on port 7871. Replaces the old per-model installs that downloaded weights with no UI.
+install_video_studio() {
+  local models="$1"
+  [[ -z "${models// /}" ]] && return 0
+  info "Installing AGH Video Studio (diffusers UI, port 7871) for:${models}"
+
+  # Map selected app names -> diffusers repo ids to prefetch into HF cache
+  local PREFETCH=""
+  for m in $models; do
+    case "$m" in
+      ltx)      PREFETCH="${PREFETCH} Lightricks/LTX-Video" ;;
+      cogvideo) PREFETCH="${PREFETCH} THUDM/CogVideoX-5b" ;;
+      hunyuan)  PREFETCH="${PREFETCH} hunyuanvideo-community/HunyuanVideo" ;;
+    esac
+  done
+
+  # Unified Gradio app — written on host, base64-encoded, decoded inside pod
+  cat > /tmp/agh_video_studio.py << 'PYEOF'
+import gradio as gr, os, time, torch
+from diffusers.utils import export_to_video
+
+MODELS_DIR = os.environ.get("AGH_MODELS", "/opt/models")
+TMPDIR_DIR = os.environ.get("TMPDIR", "/tmp")
+os.environ.setdefault("HF_HOME", os.path.join(MODELS_DIR, "hf-cache"))
+AVAILABLE = [m for m in os.environ.get("AGH_VIDEO_MODELS", "").split(",") if m]
+
+_PIPES = {}
+
+def load_pipe(model):
+    if model in _PIPES:
+        return _PIPES[model]
+    if model == "LTX-Video":
+        from diffusers import LTXPipeline
+        pipe = LTXPipeline.from_pretrained("Lightricks/LTX-Video", torch_dtype=torch.bfloat16)
+    elif model == "CogVideoX-5B":
+        from diffusers import CogVideoXPipeline
+        pipe = CogVideoXPipeline.from_pretrained("THUDM/CogVideoX-5b", torch_dtype=torch.bfloat16)
+    elif model == "HunyuanVideo":
+        from diffusers import HunyuanVideoPipeline, HunyuanVideoTransformer3DModel
+        repo = "hunyuanvideo-community/HunyuanVideo"
+        tr = HunyuanVideoTransformer3DModel.from_pretrained(repo, subfolder="transformer", torch_dtype=torch.bfloat16)
+        pipe = HunyuanVideoPipeline.from_pretrained(repo, transformer=tr, torch_dtype=torch.float16)
+    else:
+        raise ValueError("Unknown model: " + str(model))
+    # Stream layers GPU<->CPU + tile VAE so big models fit on a single card
+    pipe.enable_model_cpu_offload()
+    try:
+        pipe.vae.enable_tiling()
+    except Exception:
+        pass
+    _PIPES[model] = pipe
+    return pipe
+
+def generate(model, prompt, steps, frames, fps):
+    if not model:
+        return None, "Select a model first."
+    if not prompt.strip():
+        return None, "Enter a prompt."
+    try:
+        pipe = load_pipe(model)
+    except Exception as e:
+        return None, "Model load failed: " + str(e)[:600]
+    kwargs = {"prompt": prompt, "num_inference_steps": int(steps)}
+    if model == "LTX-Video":
+        kwargs.update(width=768, height=512, num_frames=int(frames))
+    elif model == "CogVideoX-5B":
+        kwargs.update(num_frames=int(frames), guidance_scale=6.0)
+    elif model == "HunyuanVideo":
+        kwargs.update(height=320, width=512, num_frames=int(frames))
+    try:
+        result = pipe(**kwargs)
+        video = result.frames[0]
+    except Exception as e:
+        return None, "Generation failed: " + str(e)[:600]
+    out = os.path.join(TMPDIR_DIR, "video_%d.mp4" % int(time.time()))
+    export_to_video(video, out, fps=int(fps))
+    return out, "Done: " + model
+
+with gr.Blocks(title="AGH Video Studio", theme=gr.themes.Soft()) as demo:
+    gr.Markdown("# AGH Video Studio\nTop open video models — LTX-Video, CogVideoX, HunyuanVideo. No limits, no credits.")
+    with gr.Row():
+        with gr.Column(scale=2):
+            model = gr.Dropdown(AVAILABLE, value=(AVAILABLE[0] if AVAILABLE else None), label="Model")
+            prompt = gr.Textbox(label="Prompt", lines=4,
+                placeholder="A cinematic timelapse of a futuristic city at golden hour...")
+            with gr.Row():
+                steps  = gr.Slider(10, 60, value=30, step=5, label="Steps")
+                frames = gr.Slider(17, 161, value=49, step=8, label="Frames")
+                fps    = gr.Slider(8, 30, value=16, step=1, label="FPS")
+            btn = gr.Button("Generate Video", variant="primary", size="lg")
+        with gr.Column(scale=2):
+            video_out = gr.Video(label="Generated Video")
+            status    = gr.Textbox(label="Status", interactive=False)
+    btn.click(generate, inputs=[model, prompt, steps, frames, fps], outputs=[video_out, status])
+
+demo.launch(server_name="0.0.0.0", server_port=7871, share=False)
+PYEOF
+  local VSTUDIO_B64
+  VSTUDIO_B64=$(base64 -w0 /tmp/agh_video_studio.py)
+
   nsenter -t "${POD_PID}" -m -- bash -c "
-git clone https://github.com/Tencent/HunyuanVideo /opt/HunyuanVideo 2>/dev/null || \
-  (cd /opt/HunyuanVideo && git pull)
-python3 -m venv /opt/hunyuan-env
-source /opt/hunyuan-env/bin/activate
+python3 -m venv /opt/agh-video-env
+source /opt/agh-video-env/bin/activate
+pip install --quiet wheel setuptools
 pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install --quiet -r /opt/HunyuanVideo/requirements.txt
-mkdir -p ${MODELS_DIR}/hunyuan
-hf download tencent/HunyuanVideo \
-  --local-dir ${MODELS_DIR}/hunyuan \
-" && success "HunyuanVideo installed." || warn "HunyuanVideo install failed."
+pip install --quiet 'diffusers>=0.32.0' transformers accelerate sentencepiece imageio imageio-ffmpeg gradio
+export HF_HOME=${MODELS_DIR}/hf-cache
+mkdir -p \${HF_HOME}
+for repo in ${PREFETCH}; do
+  python -c \"from huggingface_hub import snapshot_download; snapshot_download('\$repo')\" 2>/dev/null \
+    || echo \"[WARN] prefetch \$repo failed (will fetch on first use)\"
+done
+echo '${VSTUDIO_B64}' | base64 -d > /opt/agh_video_studio.py
+" && success "AGH Video Studio installed (port 7871)." || warn "AGH Video Studio install failed."
 }
 
 install_wan21() {
@@ -463,31 +606,8 @@ echo '${GRADIO_B64}' | base64 -d > /opt/Wan2.1/gradio_app.py
   success "Wan2.1 installed with Gradio UI on port 7870."
 }
 
-install_ltx() {
-  info "Installing LTX-Video (~8GB — fast generation)..."
-  nsenter -t "${POD_PID}" -m -- bash -c "
-python3 -m venv /opt/ltx-env
-source /opt/ltx-env/bin/activate
-pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install --quiet 'ltx-video' diffusers transformers accelerate
-mkdir -p ${MODELS_DIR}/ltx
-hf download Lightricks/LTX-Video \
-  --local-dir ${MODELS_DIR}/ltx \
-" && success "LTX-Video installed." || warn "LTX-Video install failed."
-}
-
-install_cogvideo() {
-  info "Installing CogVideoX-5B (~20GB)..."
-  nsenter -t "${POD_PID}" -m -- bash -c "
-python3 -m venv /opt/cogvideo-env
-source /opt/cogvideo-env/bin/activate
-pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install --quiet diffusers transformers accelerate 'imageio[ffmpeg]'
-mkdir -p ${MODELS_DIR}/cogvideo
-hf download THUDM/CogVideoX-5b \
-  --local-dir ${MODELS_DIR}/cogvideo \
-" && success "CogVideoX-5B installed." || warn "CogVideoX install failed."
-}
+# LTX-Video, CogVideoX-5B and HunyuanVideo are installed together by
+# install_video_studio() (diffusers + shared venv + unified Gradio UI on 7871).
 
 install_esrgan() {
   info "Installing Real-ESRGAN + RIFE (~500MB)..."
@@ -583,11 +703,16 @@ step "Phase 3/5: Installing always-on creative tools"
 info "Installing GIMP, Krita, Kdenlive, Audacity, Inkscape, Chrome, mpv, eog..."
 nsenter -t "${POD_PID}" -m -- bash -c "
 export DEBIAN_FRONTEND=noninteractive
+# apt-get update first: on a fresh pod the package lists are often empty, so an
+# install with no update silently fails and leaves wget/curl missing — which in turn
+# broke chrome + checkpoint downloads. Update, then ensure wget/curl are really here.
+apt-get update -y 2>/dev/null || true
 apt-get install -y --no-install-recommends \
   gimp krita kdenlive audacity inkscape \
   mpv eog \
   python3-pip python3-venv git curl wget \
   2>/dev/null
+command -v wget >/dev/null || echo '[WARN] wget still missing after apt install'
 
 # Chrome
 wget -qO /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
@@ -653,11 +778,38 @@ mkdir -p ${MODELS_DIR}/comfyui/{checkpoints,loras,vae,clip,unet,controlnet,upsca
 rm -rf /opt/ComfyUI/models
 ln -sfn ${MODELS_DIR}/comfyui /opt/ComfyUI/models
 mkdir -p /opt/ComfyUI/user/default/workflows
-
-# Pre-built workflow: Wan2.1 text-to-video
-cat > '/opt/ComfyUI/user/default/workflows/wan21_t2v.json' << 'WFEOF'
-{"last_node_id":5,"last_link_id":4,"nodes":[{"id":1,"type":"CLIPTextEncode","pos":[200,200],"size":{"0":400,"1":100},"flags":{},"order":0,"mode":0,"outputs":[{"name":"CONDITIONING","type":"CONDITIONING","links":[1]}],"properties":{},"widgets_values":["A cinematic timelapse of a futuristic city at golden hour. Flying vehicles streak across glowing skyscrapers. Ultra detailed, photorealistic, 4K quality."]},{"id":2,"type":"EmptyLatentImage","pos":[200,350],"size":{"0":300,"1":100},"flags":{},"order":1,"mode":0,"outputs":[{"name":"LATENT","type":"LATENT","links":[2]}],"properties":{},"widgets_values":[1280,720,1]},{"id":3,"type":"KSampler","pos":[650,200],"size":{"0":350,"1":300},"flags":{},"order":3,"mode":0,"inputs":[{"name":"model","type":"MODEL","link":null},{"name":"positive","type":"CONDITIONING","link":1},{"name":"negative","type":"CONDITIONING","link":null},{"name":"latent_image","type":"LATENT","link":2}],"outputs":[{"name":"LATENT","type":"LATENT","links":[3]}],"properties":{},"widgets_values":[42,"euler","normal",7,50]},{"id":4,"type":"VAEDecode","pos":[1050,200],"size":{"0":200,"1":100},"flags":{},"order":4,"mode":0,"inputs":[{"name":"samples","type":"LATENT","link":3},{"name":"vae","type":"VAE","link":null}],"outputs":[{"name":"IMAGE","type":"IMAGE","links":[4]}],"properties":{}},{"id":5,"type":"SaveImage","pos":[1300,200],"size":{"0":200,"1":100},"flags":{},"order":5,"mode":0,"inputs":[{"name":"images","type":"IMAGE","link":4}],"properties":{},"widgets_values":["wan21_output"]}],"links":[[1,1,0,3,1,"CONDITIONING"],[2,2,0,3,3,"LATENT"],[3,3,0,4,0,"LATENT"],[4,4,0,5,0,"IMAGE"]],"groups":[],"config":{},"extra":{},"version":0.4}
-WFEOF
+# Free image checkpoints (gateless mirrors — no token). Pulled via huggingface_hub
+# (just pip-installed above) instead of wget: the pod image may not ship wget, which
+# silently left the checkpoints/ dir empty and broke all ComfyUI image generation.
+export CKPT_DIR=${MODELS_DIR}/comfyui/checkpoints
+python - <<'PYEOF'
+import os
+from huggingface_hub import hf_hub_download
+ckpt_dir = os.environ['CKPT_DIR']
+os.makedirs(ckpt_dir, exist_ok=True)
+# (repo, file-in-repo, final-name-on-disk)
+jobs = [
+    ('Comfy-Org/stable-diffusion-v1-5-archive', 'v1-5-pruned-emaonly-fp16.safetensors', 'v1-5-pruned-emaonly.safetensors'),
+    ('stabilityai/stable-diffusion-xl-base-1.0', 'sd_xl_base_1.0.safetensors',          'sd_xl_base_1.0.safetensors'),
+]
+for repo, fname, dest in jobs:
+    target = os.path.join(ckpt_dir, dest)
+    if os.path.exists(target) and os.path.getsize(target) > 100_000_000:
+        print('[OK] already present:', dest); continue
+    try:
+        p = hf_hub_download(repo_id=repo, filename=fname, local_dir=ckpt_dir)
+        if os.path.abspath(p) != os.path.abspath(target):
+            os.replace(p, target)
+        print('[OK] downloaded:', dest, os.path.getsize(target))
+    except Exception as e:
+        print('[WARN] checkpoint download failed:', dest, e)
+PYEOF
+# Verify at least one checkpoint landed — fail loud instead of silently shipping an empty dir.
+if ! ls ${MODELS_DIR}/comfyui/checkpoints/*.safetensors >/dev/null 2>&1; then
+  echo '[ERROR] No ComfyUI checkpoint downloaded — image generation will not work.'
+fi
+# ComfyUI's built-in default graph is a working txt2img workflow that loads the
+# checkpoints above — no custom workflow file needed (old placeholder was invalid).
 " && success "ComfyUI installed at /opt/ComfyUI." || warn "ComfyUI install failed."
 
 info "ComfyUI handles image generation on port 8188 — no separate image UI needed."
@@ -678,10 +830,8 @@ else
     case "$app" in
       flux)     install_flux     ;;
       a1111)    install_a1111    ;;
-      hunyuan)  install_hunyuan  ;;
       wan21)    install_wan21    ;;
-      ltx)      install_ltx      ;;
-      cogvideo) install_cogvideo ;;
+      hunyuan|ltx|cogvideo) : ;;  # bundled into AGH Video Studio after the loop
       esrgan)   install_esrgan   ;;
       musicgen) install_musicgen ;;
       bark)     install_bark     ;;
@@ -690,6 +840,22 @@ else
     esac
   done
 fi
+
+# Install LTX / CogVideoX / Hunyuan together as AGH Video Studio (unified diffusers UI)
+VIDEO_EXTRAS=""
+for m in ltx cogvideo hunyuan; do
+  echo " ${SELECTED_APPS} " | grep -q " ${m} " && VIDEO_EXTRAS="${VIDEO_EXTRAS} ${m}"
+done
+VIDEO_STUDIO_LABELS=""
+for m in ${VIDEO_EXTRAS}; do
+  case "$m" in
+    ltx)      VIDEO_STUDIO_LABELS="${VIDEO_STUDIO_LABELS}LTX-Video," ;;
+    cogvideo) VIDEO_STUDIO_LABELS="${VIDEO_STUDIO_LABELS}CogVideoX-5B," ;;
+    hunyuan)  VIDEO_STUDIO_LABELS="${VIDEO_STUDIO_LABELS}HunyuanVideo," ;;
+  esac
+done
+VIDEO_STUDIO_LABELS="${VIDEO_STUDIO_LABELS%,}"
+[[ -n "${VIDEO_EXTRAS// /}" ]] && install_video_studio "${VIDEO_EXTRAS}"
 
 # ── Write CLI wrapper scripts ─────────────────────────────────────────────────
 # Users can run these from any terminal without knowing paths or venvs.
@@ -772,6 +938,20 @@ nohup python gradio_app.py \
   SERVICE_NAMES[wan21]="Wan2.1 — AI Video Generator (No Time Limits)"
 fi
 
+# AGH Video Studio (LTX / CogVideoX / Hunyuan) on port 7871
+if [[ -f /opt/agh_video_studio.py ]]; then
+  nsenter -t "${POD_PID}" -m -- bash -c "
+source /opt/agh-video-env/bin/activate
+export AGH_MODELS=${MODELS_DIR}
+export TMPDIR=${TMPDIR_OVERRIDE}
+export HF_HOME=${MODELS_DIR}/hf-cache
+export AGH_VIDEO_MODELS='${VIDEO_STUDIO_LABELS:-}'
+nohup python /opt/agh_video_studio.py > ${DATA_DIR}/agh-video-studio.log 2>&1 &
+" && success "AGH Video Studio starting on port 7871." || warn "Video Studio start failed."
+  SERVICE_PORTS[videostudio]=7871
+  SERVICE_NAMES[videostudio]="AGH Video Studio — LTX/CogVideoX/Hunyuan"
+fi
+
 # A1111 on port 7860
 if [[ -d /opt/stable-diffusion-webui ]]; then
   nsenter -t "${POD_PID}" -m -- bash -c "
@@ -809,6 +989,7 @@ fi
 PORTAL_ROWS=""
 PORTAL_ROWS+="<tr><td>🖥️</td><td><strong>XFCE Desktop</strong></td><td><a href='http://localhost:6080/vnc.html' target='_blank'>http://localhost:6080/vnc.html</a></td><td>Full Linux desktop</td></tr>"
 [[ -n "${SERVICE_PORTS[wan21]:-}" ]]    && PORTAL_ROWS+="<tr><td>🎬</td><td><strong>Wan2.1 Video</strong></td><td><a href='http://localhost:${SERVICE_PORTS[wan21]}' target='_blank'>http://localhost:${SERVICE_PORTS[wan21]}</a></td><td>AI video — no time limits</td></tr>"
+[[ -n "${SERVICE_PORTS[videostudio]:-}" ]] && PORTAL_ROWS+="<tr><td>🎞️</td><td><strong>AGH Video Studio</strong></td><td><a href='http://localhost:${SERVICE_PORTS[videostudio]}' target='_blank'>http://localhost:${SERVICE_PORTS[videostudio]}</a></td><td>LTX · CogVideoX · Hunyuan</td></tr>"
 [[ -n "${SERVICE_PORTS[comfyui]:-}" ]]  && PORTAL_ROWS+="<tr><td>⚙️</td><td><strong>ComfyUI</strong></td><td><a href='http://localhost:${SERVICE_PORTS[comfyui]}' target='_blank'>http://localhost:${SERVICE_PORTS[comfyui]}</a></td><td>Advanced AI workflow editor</td></tr>"
 [[ -n "${SERVICE_PORTS[a1111]:-}" ]]    && PORTAL_ROWS+="<tr><td>🖼️</td><td><strong>Stable Diffusion</strong></td><td><a href='http://localhost:${SERVICE_PORTS[a1111]}' target='_blank'>http://localhost:${SERVICE_PORTS[a1111]}</a></td><td>Full SD ecosystem</td></tr>"
 [[ -n "${SERVICE_PORTS[jupyter]:-}" ]]  && PORTAL_ROWS+="<tr><td>📓</td><td><strong>JupyterLab</strong></td><td><a href='http://localhost:${SERVICE_PORTS[jupyter]}' target='_blank'>http://localhost:${SERVICE_PORTS[jupyter]}</a></td><td>Python notebooks</td></tr>"
@@ -910,12 +1091,13 @@ start_tunnel "desktop" 6080
 
 # Tunnel each running service
 [[ -n "${SERVICE_PORTS[wan21]:-}" ]]    && start_tunnel "wan21"    "${SERVICE_PORTS[wan21]}"
+[[ -n "${SERVICE_PORTS[videostudio]:-}" ]] && start_tunnel "videostudio" "${SERVICE_PORTS[videostudio]}"
 [[ -n "${SERVICE_PORTS[comfyui]:-}" ]]  && start_tunnel "comfyui"  "${SERVICE_PORTS[comfyui]}"
 [[ -n "${SERVICE_PORTS[a1111]:-}" ]]    && start_tunnel "a1111"    "${SERVICE_PORTS[a1111]}"
 
 # Inject public URLs into portal page
 PORTAL_PUBLIC=""
-for svc in portal desktop fooocus wan21 comfyui a1111 jupyter vscode; do
+for svc in portal desktop wan21 videostudio comfyui a1111 jupyter vscode; do
   [[ -n "${TUNNEL_URLS[$svc]:-}" ]] && \
     PORTAL_PUBLIC+="<li><strong>${svc}</strong>: <a href='${TUNNEL_URLS[$svc]}'>${TUNNEL_URLS[$svc]}</a></li>"
 done
@@ -945,6 +1127,7 @@ echo -e "${BOLD}${GREEN}── Public URLs (shareable, no SSH needed) ───�
 [[ -n "${TUNNEL_URLS[portal]:-}" ]]   && echo -e "  ${GREEN}${BOLD}Portal:${NC}            ${TUNNEL_URLS[portal]}"
 [[ -n "${TUNNEL_URLS[desktop]:-}" ]]  && echo -e "  ${GREEN}Desktop:${NC}           ${TUNNEL_URLS[desktop]}/vnc.html  ${YELLOW}(password protected)${NC}"
 [[ -n "${TUNNEL_URLS[wan21]:-}" ]]    && echo -e "  ${GREEN}Wan2.1 Video:${NC}      ${TUNNEL_URLS[wan21]}"
+[[ -n "${TUNNEL_URLS[videostudio]:-}" ]] && echo -e "  ${GREEN}Video Studio:${NC}      ${TUNNEL_URLS[videostudio]}"
 [[ -n "${TUNNEL_URLS[comfyui]:-}" ]]  && echo -e "  ${GREEN}ComfyUI:${NC}           ${TUNNEL_URLS[comfyui]}"
 [[ -n "${TUNNEL_URLS[a1111]:-}" ]]    && echo -e "  ${GREEN}Stable Diffusion:${NC}  ${TUNNEL_URLS[a1111]}"
 echo ""

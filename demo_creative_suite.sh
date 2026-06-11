@@ -177,6 +177,15 @@ if curl -s --connect-timeout 3 "${COMFYUI_URL}/system_stats" &>/dev/null; then
   cmd "curl -X POST ${COMFYUI_URL}/prompt  # submitting image generation via ComfyUI API"
   info "This demonstrates: AI image generation — unlimited, no credits, no watermarks"
 
+  # Pick whatever checkpoint actually landed (SDXL preferred for quality, else SD1.5).
+  # Avoids a hardcoded name that makes every prompt fail when that file is absent.
+  CKPT_NAME=""
+  for c in sd_xl_base_1.0.safetensors v1-5-pruned-emaonly.safetensors; do
+    [[ -f "${MODELS_DIR}/comfyui/checkpoints/${c}" ]] && CKPT_NAME="$c" && break
+  done
+  [[ -z "$CKPT_NAME" ]] && CKPT_NAME="v1-5-pruned-emaonly.safetensors"
+  info "Using checkpoint: ${CKPT_NAME}"
+
   PROMPTS=(
     "agh_workstation|A sleek futuristic AI creative workstation glowing with blue and purple light, multiple holographic screens showing AI-generated artwork, dark minimal setup, cinematic lighting, ultra detailed"
     "agh_creator|A confident creative professional in front of multiple screens showing stunning AI-generated videos and images, golden hour light, inspired expression, cinematic aspirational"
@@ -196,7 +205,7 @@ if curl -s --connect-timeout 3 "${COMFYUI_URL}/system_stats" &>/dev/null; then
     # Submit workflow to ComfyUI
     PROMPT_ID=$(curl -s -X POST "${COMFYUI_URL}/prompt" \
       -H "Content-Type: application/json" \
-      -d "{\"prompt\":{\"1\":{\"class_type\":\"CheckpointLoaderSimple\",\"inputs\":{\"ckpt_name\":\"v1-5-pruned-emaonly.safetensors\"}},\"2\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"${prompt}\",\"clip\":[\"1\",1]}},\"3\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"blurry, ugly, watermark, low quality\",\"clip\":[\"1\",1]}},\"4\":{\"class_type\":\"EmptyLatentImage\",\"inputs\":{\"width\":1280,\"height\":720,\"batch_size\":1}},\"5\":{\"class_type\":\"KSampler\",\"inputs\":{\"model\":[\"1\",0],\"positive\":[\"2\",0],\"negative\":[\"3\",0],\"latent_image\":[\"4\",0],\"seed\":42,\"steps\":25,\"cfg\":7.5,\"sampler_name\":\"euler\",\"scheduler\":\"normal\",\"denoise\":1}},\"6\":{\"class_type\":\"VAEDecode\",\"inputs\":{\"samples\":[\"5\",0],\"vae\":[\"1\",2]}},\"7\":{\"class_type\":\"SaveImage\",\"inputs\":{\"images\":[\"6\",0],\"filename_prefix\":\"${name}\"}}}}" \
+      -d "{\"prompt\":{\"1\":{\"class_type\":\"CheckpointLoaderSimple\",\"inputs\":{\"ckpt_name\":\"${CKPT_NAME}\"}},\"2\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"${prompt}\",\"clip\":[\"1\",1]}},\"3\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"blurry, ugly, watermark, low quality\",\"clip\":[\"1\",1]}},\"4\":{\"class_type\":\"EmptyLatentImage\",\"inputs\":{\"width\":1280,\"height\":720,\"batch_size\":1}},\"5\":{\"class_type\":\"KSampler\",\"inputs\":{\"model\":[\"1\",0],\"positive\":[\"2\",0],\"negative\":[\"3\",0],\"latent_image\":[\"4\",0],\"seed\":42,\"steps\":25,\"cfg\":7.5,\"sampler_name\":\"euler\",\"scheduler\":\"normal\",\"denoise\":1}},\"6\":{\"class_type\":\"VAEDecode\",\"inputs\":{\"samples\":[\"5\",0],\"vae\":[\"1\",2]}},\"7\":{\"class_type\":\"SaveImage\",\"inputs\":{\"images\":[\"6\",0],\"filename_prefix\":\"${name}\"}}}}" \
       2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('prompt_id',''))" 2>/dev/null || echo "")
 
     if [[ -z "$PROMPT_ID" ]]; then
