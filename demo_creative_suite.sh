@@ -576,7 +576,7 @@ if [[ "$ts_idx" -gt 0 ]]; then
 ffmpeg -y -loglevel error \
   -f concat -safe 0 -i ${TS_LIST} \
   -i ${OUTPUT_DIR}/music.wav \
-  -filter_complex '[0:v]${WATERMARK}[v];[1:a]volume=0.35[a]' \
+  -filter_complex \"[0:v]${WATERMARK}[v];[1:a]volume=0.35[a]\" \
   -map '[v]' -map '[a]' \
   -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
   -c:a aac -b:a 192k -shortest \
@@ -586,7 +586,7 @@ ffmpeg -y -loglevel error \
     nsenter -t "${POD_PID}" -m -- bash -c "
 ffmpeg -y -loglevel error \
   -f concat -safe 0 -i ${TS_LIST} \
-  -vf '${WATERMARK}' \
+  -vf \"${WATERMARK}\" \
   -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
   ${FINAL}
 " && { success "FINAL promo (no music): ${FINAL}"; } || warn "Final assembly failed."
