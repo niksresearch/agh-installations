@@ -94,9 +94,14 @@ MODELS_DIR="${AGH_MODELS}"
 export TMPDIR="${TMPDIR:-${DATA_DIR}/tmp}"
 
 OUTPUT_DIR="${DATA_DIR}/agh-promo"
+BRAND_DIR="${OUTPUT_DIR}/brand"
 LOG_FILE="${OUTPUT_DIR}/demo.log"
 DEBUG_LOG="${OUTPUT_DIR}/demo-debug.log"
-mkdir -p "${OUTPUT_DIR}/images" "${OUTPUT_DIR}/videos" "${DATA_DIR}/tmp"
+mkdir -p "${OUTPUT_DIR}/images" "${OUTPUT_DIR}/videos" "${BRAND_DIR}" "${DATA_DIR}/tmp"
+
+# Fonts (used by branded intro/end cards and watermark)
+FONT_BOLD="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT_REG="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 # Re-exec into background if not already logging
 if [[ "${DEMO_LOGGING:-0}" != "1" ]]; then
@@ -160,12 +165,47 @@ ffmpeg -y -loglevel error \
 " 2>/dev/null
 }
 
-# ── Step 1: Title card ────────────────────────────────────────────────────────
-step "Step 1/6: Title card"
-make_card "${OUTPUT_DIR}/s1_title.mp4" 4 \
-  "AGH Creative Suite" "Your GPU. Your Canvas. No Limits." \
-  "0x000a1a" "white" "00ccff"
-success "Title card done."
+# ── Step 0: Fetch real AGH brand assets from aghcloud.ai ──────────────────────
+step "Step 0/6: Fetch real AGH brand assets (aghcloud.ai)"
+HAS_BRAND=false
+cmd "curl https://aghcloud.ai/agh-icon.png  +  /og-image.png  # official logo + banner"
+info "Pulling the real AGH logo and banner straight from the production site."
+curl -sL --max-time 30 "https://aghcloud.ai/agh-icon.png" -o "${BRAND_DIR}/agh-icon.png" 2>/dev/null || true
+curl -sL --max-time 30 "https://aghcloud.ai/og-image.png" -o "${BRAND_DIR}/og-image.png" 2>/dev/null || true
+# Validate both are real PNGs (file magic) and non-trivial in size
+if [[ -s "${BRAND_DIR}/agh-icon.png" ]] && [[ -s "${BRAND_DIR}/og-image.png" ]] \
+   && file "${BRAND_DIR}/agh-icon.png" | grep -qi "PNG image" \
+   && file "${BRAND_DIR}/og-image.png" | grep -qi "PNG image"; then
+  HAS_BRAND=true
+  success "Brand assets downloaded — using the genuine AGH logo + banner."
+  show_output "AGH Brand Assets" "${BRAND_DIR}"
+else
+  warn "Could not fetch brand assets — falling back to generated title cards."
+fi
+
+# ── Step 1: Branded banner intro (real banner + logo) ─────────────────────────
+step "Step 1/6: Branded intro"
+if [[ "$HAS_BRAND" == "true" ]]; then
+  info "Compositing the official banner with the AGH logo and tagline."
+  nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error \
+  -loop 1 -t 5 -i '${BRAND_DIR}/og-image.png' \
+  -loop 1 -t 5 -i '${BRAND_DIR}/agh-icon.png' \
+  -filter_complex \"
+    [0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,setsar=1,fps=24,format=yuv420p,fade=t=in:st=0:d=1,fade=t=out:st=4:d=1[bg];
+    [1:v]scale=200:-1[lg];
+    [bg][lg]overlay=(W-w)/2:90,drawtext=text='Creative Suite':fontsize=40:fontcolor=white:x=(w-text_w)/2:y=h-220:fontfile=${FONT_BOLD},drawtext=text='Your GPU. Your Canvas. No Limits.':fontsize=24:fontcolor=0x00ccff:x=(w-text_w)/2:y=h-160:fontfile=${FONT_REG}[v]
+  \" \
+  -map '[v]' -t 5 -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p '${OUTPUT_DIR}/s1_title.mp4'
+" && success "Branded intro done." || warn "Branded intro failed — using plain card."
+fi
+# Fallback / always-have title card
+if [[ ! -f "${OUTPUT_DIR}/s1_title.mp4" ]]; then
+  make_card "${OUTPUT_DIR}/s1_title.mp4" 5 \
+    "AGH Creative Suite" "Your GPU. Your Canvas. No Limits." \
+    "0x000a1a" "white" "00ccff"
+  success "Title card done."
+fi
 
 # ── Step 2: AI brand images via ComfyUI API ───────────────────────────────────
 step "Step 2/6: AI brand images (ComfyUI API)"
@@ -500,21 +540,9 @@ fi
 # ── Step 6: Section cards + final assembly ────────────────────────────────────
 step "Step 6/6: Branding + Final Assembly"
 
-FONT_BOLD="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FONT_REG="/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-
-# ── Branded title card with large AGH logo ────────────────────────────────────
-info "Building branded title + section cards..."
-nsenter -t "${POD_PID}" -m -- bash -c "
-ffmpeg -y -loglevel error \
-  -f lavfi -i color=c=0x05060a:size=1280x720:duration=5:rate=24 \
-  -vf \"
-    drawtext=text='AGH':fontsize=140:fontcolor=0x58a6ff:x=(w-text_w)/2:y=(h-text_h)/2-80:font=DejaVu Sans:fontfile=${FONT_BOLD},
-    drawtext=text='CREATIVE SUITE':fontsize=34:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2+60:fontfile=${FONT_REG},
-    drawtext=text='Your GPU. Your Canvas. No Limits.':fontsize=22:fontcolor=0x00ccff:x=(w-text_w)/2:y=(h-text_h)/2+120:fontfile=${FONT_REG}
-  \" \
-  -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p ${OUTPUT_DIR}/s1_title.mp4
-" && success "Branded title card done." || warn "Title card failed."
+# Branded intro (s1_title.mp4) was already built in Step 1 from the real AGH
+# banner + logo — do not rebuild/overwrite it here.
+info "Building section cards..."
 
 # Section label cards (only if that segment exists)
 [[ -f "${OUTPUT_DIR}/s2_images.mp4" ]] && \
@@ -524,8 +552,24 @@ ffmpeg -y -loglevel error \
 [[ -f "${OUTPUT_DIR}/s4_video.mp4" ]] && \
   make_card "${OUTPUT_DIR}/card_video.mp4" 2.5 "AI Video Generation" "Wan2.1 — No Time Limits" "0x1a0500" "white" "ff6600"
 
-# Branded end card
-nsenter -t "${POD_PID}" -m -- bash -c "
+# Branded end card (with real logo if available)
+if [[ "$HAS_BRAND" == "true" ]]; then
+  nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error \
+  -f lavfi -i color=c=0x05060a:size=1280x720:duration=6:rate=24 \
+  -loop 1 -t 6 -i '${BRAND_DIR}/agh-icon.png' \
+  -filter_complex \"
+    [1:v]scale=240:-1[lg];
+    [0:v][lg]overlay=(W-w)/2:(H-h)/2-110,
+    drawtext=text='CREATIVE SUITE':fontsize=30:fontcolor=white:x=(w-text_w)/2:y=h/2+40:fontfile=${FONT_REG},
+    drawtext=text='This entire video was made using AGH Creative Suite':fontsize=20:fontcolor=0x00ccff:x=(w-text_w)/2:y=h/2+95:fontfile=${FONT_REG},
+    drawtext=text='aghcloud.ai':fontsize=18:fontcolor=0x8b949e:x=(w-text_w)/2:y=h/2+135:fontfile=${FONT_REG}[v]
+  \" \
+  -map '[v]' -t 6 -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p ${OUTPUT_DIR}/card_end.mp4
+" && success "Branded end card done." || warn "End card failed."
+fi
+if [[ ! -f "${OUTPUT_DIR}/card_end.mp4" ]]; then
+  nsenter -t "${POD_PID}" -m -- bash -c "
 ffmpeg -y -loglevel error \
   -f lavfi -i color=c=0x05060a:size=1280x720:duration=6:rate=24 \
   -vf \"
@@ -536,6 +580,7 @@ ffmpeg -y -loglevel error \
   \" \
   -c:v libx264 -preset fast -crf 18 -pix_fmt yuv420p ${OUTPUT_DIR}/card_end.mp4
 " && success "Branded end card done." || warn "End card failed."
+fi
 
 # ── Normalize every segment to uniform spec (.ts) so concat never fails ────────
 # Different sources (cards/blender/wan2.1/slideshow) have different codec/fps/SAR.
@@ -568,29 +613,41 @@ FINAL="${OUTPUT_DIR}/AGH_Creative_Suite_Promo.mp4"
 
 if [[ "$ts_idx" -gt 0 ]]; then
   info "Stitching ${ts_idx} segments + AGH watermark + music into final video..."
-  # AGH watermark persists in top-right corner across whole video
-  WATERMARK="drawtext=text='AGH':fontsize=30:fontcolor=white@0.85:x=w-tw-28:y=24:fontfile=${FONT_BOLD},drawtext=text='Creative Suite':fontsize=12:fontcolor=0x00ccff@0.85:x=w-tw-28:y=58:fontfile=${FONT_REG}"
 
-  if [[ -f "${OUTPUT_DIR}/music.wav" ]]; then
-    nsenter -t "${POD_PID}" -m -- bash -c "
-ffmpeg -y -loglevel error \
-  -f concat -safe 0 -i ${TS_LIST} \
-  -i ${OUTPUT_DIR}/music.wav \
-  -filter_complex \"[0:v]${WATERMARK}[v];[1:a]volume=0.35[a]\" \
-  -map '[v]' -map '[a]' \
-  -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
-  -c:a aac -b:a 192k -shortest \
-  ${FINAL}
-" && { success "FINAL promo (with music): ${FINAL}"; } || warn "Final assembly failed."
-  else
-    nsenter -t "${POD_PID}" -m -- bash -c "
-ffmpeg -y -loglevel error \
-  -f concat -safe 0 -i ${TS_LIST} \
-  -vf \"${WATERMARK}\" \
-  -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
-  ${FINAL}
-" && { success "FINAL promo (no music): ${FINAL}"; } || warn "Final assembly failed."
+  # Build the input + filter graph dynamically: 0 = concat video, then optional
+  # logo + music. Real-logo overlay (top-right) if brand assets were fetched,
+  # otherwise a text watermark.
+  INPUTS=(-f concat -safe 0 -i "${TS_LIST}")
+  next_idx=1
+  LOGO_IDX=-1; MUS_IDX=-1
+  if [[ "$HAS_BRAND" == "true" && -f "${BRAND_DIR}/agh-icon.png" ]]; then
+    INPUTS+=(-i "${BRAND_DIR}/agh-icon.png"); LOGO_IDX=$next_idx; next_idx=$((next_idx+1))
   fi
+  if [[ -f "${OUTPUT_DIR}/music.wav" ]]; then
+    INPUTS+=(-i "${OUTPUT_DIR}/music.wav"); MUS_IDX=$next_idx; next_idx=$((next_idx+1))
+  fi
+
+  if [[ "$LOGO_IDX" -ge 0 ]]; then
+    VCHAIN="[${LOGO_IDX}:v]scale=120:-1[lg];[0:v][lg]overlay=W-w-24:20[v]"
+  else
+    VCHAIN="[0:v]drawtext=text='AGH':fontsize=30:fontcolor=white@0.85:x=w-tw-28:y=24:fontfile=${FONT_BOLD},drawtext=text='Creative Suite':fontsize=12:fontcolor=0x00ccff@0.85:x=w-tw-28:y=58:fontfile=${FONT_REG}[v]"
+  fi
+
+  ACHAIN=""; AMAP=""; AOUT=""
+  if [[ "$MUS_IDX" -ge 0 ]]; then
+    ACHAIN=";[${MUS_IDX}:a]volume=0.35[a]"
+    AMAP="-map [a]"
+    AOUT="-c:a aac -b:a 192k -shortest"
+  fi
+
+  nsenter -t "${POD_PID}" -m -- bash -c "
+ffmpeg -y -loglevel error \
+  ${INPUTS[*]} \
+  -filter_complex \"${VCHAIN}${ACHAIN}\" \
+  -map '[v]' ${AMAP} \
+  -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p ${AOUT} \
+  ${FINAL}
+" && { success "FINAL promo: ${FINAL}"; } || warn "Final assembly failed."
 
   # Cleanup intermediate TS files
   rm -f "${OUTPUT_DIR}"/seg_*.ts 2>/dev/null || true
@@ -617,6 +674,7 @@ ulog "  Finished:  $(date '+%Y-%m-%d %H:%M:%S')"
 ulog "  GPU used:  ${GPU_NAME}"
 ulog ""
 ulog "  WHAT JUST HAPPENED (automatically, zero human input):"
+[[ "$HAS_BRAND" == "true" ]]           && ulog "  ✓ Real AGH logo + banner fetched — aghcloud.ai"
 [[ -f "${OUTPUT_DIR}/s2_images.mp4" ]] && ulog "  ✓ AI brand images generated      — ComfyUI"
 [[ -f "${OUTPUT_DIR}/s3_logo.mp4" ]]   && ulog "  ✓ AGH logo 3D animation rendered — Blender EEVEE headless"
 [[ -f "${OUTPUT_DIR}/s4_video.mp4" ]]  && ulog "  ✓ AI video clips generated       — Wan2.1 14B model"

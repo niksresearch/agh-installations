@@ -9,75 +9,78 @@ One H100. One hour. ~$2.50.
 
 ## What We're Building
 
-A 90-second promo video structured as:
+A ~70-second branded promo, assembled automatically by `demo_creative_suite.sh`:
 
-| Segment | Duration | Tool | Description |
-|---|---|---|---|
-| 1. Hook | 4s | FFmpeg | Dark opening — "Your GPU. Your Canvas." |
-| 2. Problem | 8s | Wan2.1 + FFmpeg | Show the frustration of limited tools |
-| 3. Solution reveal | 5s | Blender | AGH logo 3D reveal animation |
-| 4. Image gen demo | 15s | Fooocus → Kdenlive | 6 images generated live, slideshow |
-| 5. Video gen demo | 20s | Wan2.1 | AI video of futuristic creative workspace |
-| 6. 3D demo | 12s | Blender | Orbiting planet / abstract tech render |
-| 7. Call to action | 6s | FFmpeg | Portal URL, tagline |
-| Music (full) | 90s | MusicGen | Epic cinematic underscore |
+| Segment | Tool | Description |
+|---|---|---|
+| 0. Brand fetch | curl | Pull the real `agh-icon.png` + `og-image.png` from `aghcloud.ai` |
+| 1. Branded intro | FFmpeg | Real banner background + real logo overlay + tagline, fade in/out |
+| 2. Image gen | ComfyUI (port 8188) | 6 brand images generated live (SDXL → SD1.5 auto-fallback) → slideshow |
+| 3. Logo 3D reveal | Blender | AGH logo 3D reveal, glowing orbital rings (headless EEVEE) |
+| 4. AI video | Wan2.1 14B | Two cinematic clips — futuristic studio + AI-generation reveal |
+| 5. Music | MusicGen | Original ~90s cinematic score |
+| 6. Assembly | FFmpeg | Section cards, real-logo watermark, music, reliable TS concat |
+
+> Bundle 1 "Starter" = `flux wan21 esrgan`. Images run on whatever checkpoint
+> actually downloaded (SDXL preferred, SD1.5 fallback) — the script auto-detects.
 
 ---
 
-## Step 1 — Generate Brand Images (Fooocus)
+## Step 1 — Generate Brand Images (ComfyUI)
 
-Open portal → click **Fooocus** → `http://localhost:7865`
+Open portal → click **ComfyUI** → `http://localhost:8188`
 
-Generate these 6 images. Each takes ~60 seconds. No limits.
+The automated script submits these via the ComfyUI API (`POST /prompt`) using the
+checkpoint that actually downloaded — SDXL (`sd_xl_base_1.0.safetensors`) if present,
+else SD 1.5. To drive it by hand, load a basic txt2img graph and use these 6 prompts
+(16:9, ~25 steps, cfg 7.5, sampler euler). Each takes ~20–60s on the H100.
 
-### Image 1 — Hero: "The AGH Workstation"
+### Image 1 — `agh_workstation`
 ```
 A sleek futuristic AI creative workstation glowing with blue and purple light, 
 multiple holographic screens showing AI-generated artwork, dark minimal setup, 
-cinematic lighting, ultra detailed, 8K, concept art style
+cinematic lighting, ultra detailed
 ```
 Settings: Realistic, 16:9
 
-### Image 2 — "Before AGH" (frustrated creator)
-```
-A frustrated graphic designer staring at a laptop screen showing a paywall and 
-"credits exhausted" message, dark moody lighting, editorial photography style, 
-cinematic color grade
-```
-Settings: Realistic, 16:9
-
-### Image 3 — "After AGH" (empowered creator)  
+### Image 2 — `agh_creator`
 ```
 A confident creative professional in front of multiple screens showing stunning 
 AI-generated videos and images, golden hour light, inspired expression, 
-cinematic, aspirational lifestyle photography
+cinematic aspirational
 ```
 Settings: Realistic, 16:9
 
-### Image 4 — Abstract AI creativity
+### Image 3 — `agh_abstract_ai`
 ```
-Abstract visualization of artificial intelligence creativity — flowing neural 
-networks forming into beautiful art pieces, electric blue and purple particles, 
-deep space background, photorealistic digital art, 8K
+Abstract visualization of artificial intelligence creativity, flowing neural 
+networks forming beautiful art, electric blue and purple particles, 
+deep space background, 8K
 ```
-Settings: MidJourney style, 16:9
+Settings: Realistic, 16:9
 
-### Image 5 — GPU power
+### Image 4 — `agh_gpu_power`
 ```
 An H100 GPU chip glowing with neon blue light, futuristic close-up macro shot, 
-cinematic dramatic lighting, chrome and silicon textures, tech product photography
+cinematic dramatic lighting, chrome and silicon textures
 ```
 Settings: Realistic, 16:9
 
-### Image 6 — AGH brand closer
+### Image 5 — `agh_brand`
 ```
-The text "AGH" formed from glowing particles and light trails against a dark 
-background, futuristic logo reveal style, electric blue and cyan colors, 
-cinematic, 8K render quality
+The letters AGH formed from glowing light particles and energy trails against 
+dark background, futuristic logo, electric blue and cyan, cinematic 8K
 ```
-Settings: Anime / Digital Art, 16:9
+Settings: Realistic, 16:9
 
-**Save all 6** to `/ephemeral/promo/images/`
+### Image 6 — `agh_no_limits`
+```
+A creative studio at night, screens glowing with AI-generated art, text NO LIMITS 
+visible, inspiring atmosphere, cinematic wide shot
+```
+Settings: Realistic, 16:9
+
+**Save all 6** to `<DATA_DIR>/agh-promo/images/` (the script writes them there automatically — ComfyUI prefixes each filename with the name above).
 
 ---
 
@@ -85,34 +88,30 @@ Settings: Anime / Digital Art, 16:9
 
 Open portal → click **Wan2.1 Video** → `http://localhost:7870`
 
-### Video A — The Creative Workspace (main hero clip, 20s)
+The automated script generates **two** clips (`t2v-14B`, 1280×720, guidance 6.0),
+then trims them for the reel.
+
+### Clip 1 — `wan21_workspace.mp4` (futuristic studio, trimmed to 15s)
 ```
 A futuristic AI creative studio. Holographic screens display stunning AI-generated 
 artwork being created in real-time. Glowing particle effects flow between screens. 
 Camera slowly pushes forward through the workspace. Deep blue and purple lighting. 
 Cinematic, photorealistic, ultra smooth motion, 4K commercial quality.
 ```
-- Steps: 50 | Guidance: 7.0 | Resolution: 1280×720
+- `--sample_steps 50` | `--sample_guide_scale 6.0`
 
-### Video B — AI Generation in Action (process clip, 15s)
+### Clip 2 — `wan21_ai_gen.mp4` (AI-generation reveal, trimmed to 10s)
 ```
-An abstract visualization of an AI generating an image — pixels assembling from 
-noise into a stunning photorealistic landscape. Time-lapse style, particle effects, 
+Abstract visualization of an AI generating an image, pixels assembling from noise 
+into a stunning photorealistic landscape, time-lapse style, particle effects, 
 glowing neural pathways, electric blue light, dramatic reveal, cinematic 4K.
 ```
-- Steps: 50 | Guidance: 6.5 | Resolution: 1280×720
+- `--sample_steps 40` | `--sample_guide_scale 6.0`
 
-### Video C — GPU Power (product capability clip, 10s)
-```
-An extreme close-up of a GPU chip running at full power, glowing blue and orange 
-heat effects, electricity arcing between components, slow motion, macro cinematic 
-shot, dramatic industrial beauty, 4K.
-```
-- Steps: 40 | Guidance: 6.0 | Resolution: 1280×720
+Each generation: ~8-15 min on H100. Wan2.1 14B uses ~73GB VRAM — do not run image
+generation (ComfyUI) at the same time.
 
-Each generation: ~8-15 min on H100. Queue all three before going for coffee.
-
-**Save to:** `/ephemeral/promo/videos/`
+**Save to:** `<DATA_DIR>/agh-promo/videos/`
 
 ---
 
@@ -251,7 +250,7 @@ scene.render.image_settings.file_format = "FFMPEG"
 scene.render.ffmpeg.format = "MPEG4"
 scene.render.ffmpeg.codec = "H264"
 scene.render.ffmpeg.constant_rate_factor = "HIGH"
-scene.render.filepath = "/ephemeral/promo/agh_logo_reveal.mp4"
+scene.render.filepath = "/ephemeral/agh-promo/agh_logo_reveal.mp4"
 scene.render.engine = "BLENDER_EEVEE"
 
 eevee = scene.eevee
@@ -291,7 +290,7 @@ audio = m.generate([
     "inspiring and futuristic, suitable for a premium tech advertisement"
 ])[0].cpu()
 
-out = "/ephemeral/promo/agh_promo_music.wav"
+out = "/ephemeral/agh-promo/agh_promo_music.wav"
 torchaudio.save(out, audio, 32000)
 print(f"Saved: {out}")
 EOF
@@ -312,19 +311,19 @@ Open **Kdenlive** from XFCE desktop.
 - Project name: `AGH_Creative_Suite_Promo`
 
 ### Import all assets
-**Project → Add Clip** → select:
+**Project → Add Clip** → select (`<DATA_DIR>` = `/ephemeral` on Shadeform):
 ```
-/ephemeral/promo/images/img_01.png  (AGH workstation)
-/ephemeral/promo/images/img_02.png  (frustrated creator)
-/ephemeral/promo/images/img_03.png  (empowered creator)
-/ephemeral/promo/images/img_04.png  (abstract AI)
-/ephemeral/promo/images/img_05.png  (GPU)
-/ephemeral/promo/images/img_06.png  (AGH brand)
-/ephemeral/promo/videos/video_A.mp4 (creative workspace)
-/ephemeral/promo/videos/video_B.mp4 (AI generation)
-/ephemeral/promo/videos/video_C.mp4 (GPU power)
-/ephemeral/promo/agh_logo_reveal.mp4
-/ephemeral/promo/agh_promo_music.wav
+<DATA_DIR>/agh-promo/images/agh_workstation_*.png   (futuristic workstation)
+<DATA_DIR>/agh-promo/images/agh_creator_*.png       (creative professional)
+<DATA_DIR>/agh-promo/images/agh_abstract_ai_*.png    (abstract AI)
+<DATA_DIR>/agh-promo/images/agh_gpu_power_*.png      (H100 GPU)
+<DATA_DIR>/agh-promo/images/agh_brand_*.png          (AGH brand mark)
+<DATA_DIR>/agh-promo/images/agh_no_limits_*.png      (studio / NO LIMITS)
+<DATA_DIR>/agh-promo/videos/wan21_workspace.mp4      (futuristic studio)
+<DATA_DIR>/agh-promo/videos/wan21_ai_gen.mp4         (AI-generation reveal)
+<DATA_DIR>/agh-promo/agh_logo_reveal.mp4
+<DATA_DIR>/agh-promo/agh_promo_music.wav
+<DATA_DIR>/agh-promo/brand/agh-icon.png              (real logo — overlay track)
 ```
 
 ### Timeline assembly
@@ -333,39 +332,35 @@ Drag to Video Track 1 in this order:
 
 | Clip | In | Duration | Effect |
 |---|---|---|---|
-| Black (title card) | 0s | 4s | Add text: "Your GPU. Your Canvas." |
-| `img_02.png` (frustrated) | 4s | 4s | Ken Burns zoom |
-| `img_03.png` (empowered) | 8s | 4s | Ken Burns zoom, faster |
-| `agh_logo_reveal.mp4` | 12s | 5s | Fade in |
-| `video_B.mp4` (AI gen) | 17s | 10s | Full |
-| `img_04.png` (abstract AI) | 27s | 3s | Quick cut |
-| `img_01.png` (workstation) | 30s | 3s | Quick cut |
-| `img_05.png` (GPU) | 33s | 3s | Quick cut |
-| `video_A.mp4` (workspace) | 36s | 15s | Full, cinematic |
-| `video_C.mp4` (GPU) | 51s | 8s | Trimmed to 8s |
-| `img_06.png` (AGH brand) | 59s | 5s | Slow zoom |
-| Black (end card) | 64s | 6s | Text: URL + tagline |
+| Branded intro (banner + logo) | 0s | 5s | Real `og-image.png` bg + `agh-icon.png`, fade in/out |
+| `agh_workstation_*.png` | 5s | 4s | Ken Burns zoom |
+| `agh_creator_*.png` | 9s | 4s | Ken Burns zoom |
+| `agh_logo_reveal.mp4` | 13s | 5s | Fade in |
+| `wan21_ai_gen.mp4` | 18s | 10s | Full |
+| `agh_abstract_ai_*.png` | 28s | 3s | Quick cut |
+| `agh_gpu_power_*.png` | 31s | 3s | Quick cut |
+| `wan21_workspace.mp4` | 34s | 15s | Full, cinematic |
+| `agh_brand_*.png` | 49s | 4s | Slow zoom |
+| `agh_no_limits_*.png` | 53s | 4s | Slow zoom |
+| End card (logo + tagline) | 57s | 6s | Real `agh-icon.png` + `aghcloud.ai` |
 
-**Audio Track 1:** `agh_promo_music.wav` — starts at 0s, fades out at 68s
+**Audio Track 1:** `agh_promo_music.wav` — starts at 0s, fades out near the end  
+**Overlay track (full timeline):** `brand/agh-icon.png` scaled small, top-right — the persistent watermark
 
 ### Add text overlays
 
-Double-click each text card in timeline → **Edit** text:
+The branded intro (0–5s) and end card already carry the real logo + tagline.
+Add these lower-thirds / overlays on top:
 
-1. Opening (0–4s): `"Your GPU. Your Canvas."`  
-   Font: DejaVu Sans Bold, Size 72, white, centered
+1. Solution (13–18s, over logo reveal): `"Introducing AGH Creative Suite"`  
+   Font: DejaVu Sans Bold, 48, `#00ccff`, centered
 
-2. Problem (4–8s): `"Commercial tools limit you"`  
-   Font: 36, `#ff4444`, bottom third
+2. Features — lower-thirds:  
+   - 18s: `"AI Image Generation — Unlimited"`  
+   - 34s: `"AI Video — No Time Limits"`  
+   Font: 36, white, bottom third
 
-3. Solution (12–17s): `"Introducing AGH Creative Suite"`  
-   Font: 48, `#00ccff`, centered
-
-4. Features (17–36s): Add lower-thirds:  
-   - 17s: `"AI Image Generation — Unlimited"`  
-   - 27s: `"AI Video — No Time Limits"`
-
-5. End card (64–70s):
+3. End card (57–63s):
    ```
    AGH Creative Suite
    aghcloud.ai
@@ -374,10 +369,10 @@ Double-click each text card in timeline → **Edit** text:
 
 ### Apply transitions
 - Between all clips: **Dissolve** transition, 12 frames (0.5s)
-- After logo reveal → video B: **Wipe** (left to right), 18 frames
+- After logo reveal → `wan21_ai_gen.mp4`: **Wipe** (left to right), 18 frames
 
 ### Color grade
-Select `video_A.mp4` → **Effects → Color → Levels**:
+Select `wan21_workspace.mp4` → **Effects → Color → Levels**:
 - Reduce highlights slightly
 - Push midtones warm (+10)
 - Add slight vignette for cinema feel
@@ -389,7 +384,7 @@ Apply same grade to all video clips: right-click → **Copy Effect** → select 
 - Profile: `H.264/AAC (MP4)`
 - Resolution: `1920×1080`
 - Quality: `High (CRF 18)`
-- Output: `/ephemeral/promo/AGH_Creative_Suite_FINAL.mp4`
+- Output: `<DATA_DIR>/agh-promo/AGH_Creative_Suite_Promo.mp4`
 
 Click **Render to File** → ~5 minutes.
 
@@ -411,16 +406,37 @@ scp -r shadeform@<SERVER_IP>:<DATA_DIR>/agh-promo/ ~/Desktop/agh-promo/
 
 ---
 
+## Real brand assets (fetched live from aghcloud.ai)
+
+Step 0 of `demo_creative_suite.sh` pulls the genuine AGH assets straight from the
+production site, validates they are real PNGs, and falls back to generated text
+cards if the site is unreachable:
+
+- `https://aghcloud.ai/agh-icon.png` — the AGH logo, 548×440 **RGBA (transparent)** —
+  used as the intro logo, the end-card mark, and the persistent watermark.
+- `https://aghcloud.ai/og-image.png` — the social banner, 1408×768 — used as the
+  intro background.
+
+```bash
+curl -sL https://aghcloud.ai/agh-icon.png -o brand/agh-icon.png
+curl -sL https://aghcloud.ai/og-image.png -o brand/og-image.png
+```
+
 ## AGH Branding (required for a proper promo look)
 
 The video must look branded, not like raw clips stitched together:
 
-- **Title card** — large `AGH` logo + "CREATIVE SUITE" + tagline (5s open)
+- **Branded intro** — real `og-image.png` banner background + real `agh-icon.png`
+  logo overlay + "Creative Suite" + tagline, fade in/out (5s open)
 - **Section cards** — labelled transitions ("AI Video Generation — No Time Limits") between each capability
-- **Persistent watermark** — small `AGH / Creative Suite` top-right corner across the ENTIRE video
-- **End card** — `AGH` logo + "This entire video was made using AGH Creative Suite" + `aghcloud.ai` (6s close)
+- **Persistent watermark** — real `agh-icon.png` logo scaled small, top-right corner across the ENTIRE video
+- **End card** — real `agh-icon.png` logo + "This entire video was made using AGH Creative Suite" + `aghcloud.ai` (6s close)
 
-The automated `demo_creative_suite.sh` applies all four via FFmpeg `drawtext`. For manual Kdenlive edits, add a PNG logo overlay track spanning the full timeline.
+The automated `demo_creative_suite.sh` composites the **real fetched logo + banner**
+for the intro, end card, and watermark (overlaying the PNG, not just `drawtext`
+text). If the fetch fails it auto-falls back to `drawtext` text cards so the run
+never breaks. For manual Kdenlive edits, add the `agh-icon.png` overlay track
+spanning the full timeline.
 
 ---
 
@@ -443,6 +459,7 @@ Every tool in the suite contributed to this video:
 
 | Contribution | Tool |
 |---|---|
+| Real logo + banner | **curl** — fetched live from `aghcloud.ai` |
 | Brand images | **ComfyUI** (port 8188, FLUX/SD) |
 | Cinematic video clips | **Wan2.1** |
 | AGH logo 3D reveal | **Blender** (headless EEVEE) |
