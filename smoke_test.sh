@@ -88,9 +88,12 @@ t_image() {
   local ckpt pid f
   ckpt=$(ls "${MODELS_DIR}"/comfyui/checkpoints/*.safetensors 2>/dev/null | head -1 | xargs -n1 basename)
   [[ -z "$ckpt" ]] && { echo "no checkpoint in ${MODELS_DIR}/comfyui/checkpoints" > "${OUT}/image.err"; return 1; }
-  log "    checkpoint: ${ckpt}  size: ${IMG_W}x${IMG_H}  steps: ${IMG_STEPS}"
+  # Random seed each run: a fixed seed makes ComfyUI dedupe identical prompts and
+  # return a cached result in 0.00s with no new output under this prompt_id (KeyError '7').
+  local SEED=$(( (RANDOM<<15) ^ RANDOM ))
+  log "    checkpoint: ${ckpt}  size: ${IMG_W}x${IMG_H}  steps: ${IMG_STEPS}  seed: ${SEED}"
   pid=$(curl -s -X POST http://127.0.0.1:8188/prompt -H "Content-Type: application/json" \
-    -d "{\"prompt\":{\"1\":{\"class_type\":\"CheckpointLoaderSimple\",\"inputs\":{\"ckpt_name\":\"${ckpt}\"}},\"2\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"a glowing blue robot, simple\",\"clip\":[\"1\",1]}},\"3\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"blurry\",\"clip\":[\"1\",1]}},\"4\":{\"class_type\":\"EmptyLatentImage\",\"inputs\":{\"width\":${IMG_W},\"height\":${IMG_H},\"batch_size\":1}},\"5\":{\"class_type\":\"KSampler\",\"inputs\":{\"model\":[\"1\",0],\"positive\":[\"2\",0],\"negative\":[\"3\",0],\"latent_image\":[\"4\",0],\"seed\":1,\"steps\":${IMG_STEPS},\"cfg\":7,\"sampler_name\":\"euler\",\"scheduler\":\"normal\",\"denoise\":1}},\"6\":{\"class_type\":\"VAEDecode\",\"inputs\":{\"samples\":[\"5\",0],\"vae\":[\"1\",2]}},\"7\":{\"class_type\":\"SaveImage\",\"inputs\":{\"images\":[\"6\",0],\"filename_prefix\":\"smoketest\"}}}}" \
+    -d "{\"prompt\":{\"1\":{\"class_type\":\"CheckpointLoaderSimple\",\"inputs\":{\"ckpt_name\":\"${ckpt}\"}},\"2\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"a glowing blue robot, simple\",\"clip\":[\"1\",1]}},\"3\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"blurry\",\"clip\":[\"1\",1]}},\"4\":{\"class_type\":\"EmptyLatentImage\",\"inputs\":{\"width\":${IMG_W},\"height\":${IMG_H},\"batch_size\":1}},\"5\":{\"class_type\":\"KSampler\",\"inputs\":{\"model\":[\"1\",0],\"positive\":[\"2\",0],\"negative\":[\"3\",0],\"latent_image\":[\"4\",0],\"seed\":${SEED},\"steps\":${IMG_STEPS},\"cfg\":7,\"sampler_name\":\"euler\",\"scheduler\":\"normal\",\"denoise\":1}},\"6\":{\"class_type\":\"VAEDecode\",\"inputs\":{\"samples\":[\"5\",0],\"vae\":[\"1\",2]}},\"7\":{\"class_type\":\"SaveImage\",\"inputs\":{\"images\":[\"6\",0],\"filename_prefix\":\"smoketest\"}}}}" \
     2>>"${OUT}/image.err" | python3 -c "import sys,json;print(json.load(sys.stdin).get('prompt_id',''))" 2>>"${OUT}/image.err")
   [[ -z "$pid" ]] && { echo "ComfyUI rejected prompt (is it running on :8188?)" >> "${OUT}/image.err"; return 1; }
   for _ in $(seq 1 36); do
