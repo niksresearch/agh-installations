@@ -58,6 +58,10 @@ else
   HUN_FRAMES=25;  HUN_W=512; HUN_H=320; HUN_STEPS=15
 fi
 
+# Shared video prompt — same text for Wan2.1 and HunyuanVideo so the two clips are
+# directly comparable.
+SMOKE_PROMPT="A futuristic AI creative studio, holographic screens displaying glowing artwork, blue and purple particles drifting through the air, slow cinematic camera push forward, photorealistic, smooth motion, 4K"
+
 # ── Which tests ───────────────────────────────────────────────────────────────
 CORE=(image upscale music voice)
 ALL=(image upscale music voice wan21 hunyuan)
@@ -169,7 +173,7 @@ python generate.py --task t2v-14B --size ${WAN_SIZE} \
   --ckpt_dir ${MODELS_DIR}/wan21 \
   --frame_num ${WAN_FRAMES} \
   --sample_steps ${WAN_STEPS} --sample_guide_scale 6.0 \
-  --prompt 'a blue glowing cube rotating, simple' \
+  --prompt '${SMOKE_PROMPT}' \
   --save_file ${OUT}/wan.mp4 2>>${OUT}/wan21.err
 "
   [[ -s "${OUT}/wan.mp4" ]] && { log "    -> ${OUT}/wan.mp4"; return 0; } || return 1
@@ -188,7 +192,7 @@ repo='hunyuanvideo-community/HunyuanVideo'
 tr=HunyuanVideoTransformer3DModel.from_pretrained(repo, subfolder='transformer', torch_dtype=torch.bfloat16)
 pipe=HunyuanVideoPipeline.from_pretrained(repo, transformer=tr, torch_dtype=torch.float16)
 pipe.enable_model_cpu_offload(); pipe.vae.enable_tiling()
-v=pipe(prompt='a glowing neon ring, simple', num_frames=${HUN_FRAMES}, height=${HUN_H}, width=${HUN_W}, num_inference_steps=${HUN_STEPS}).frames[0]
+v=pipe(prompt='${SMOKE_PROMPT}', num_frames=${HUN_FRAMES}, height=${HUN_H}, width=${HUN_W}, num_inference_steps=${HUN_STEPS}).frames[0]
 export_to_video(v, '${OUT}/hunyuan.mp4', fps=12)
 print('ok')
 PY
