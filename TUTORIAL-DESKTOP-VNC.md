@@ -418,7 +418,7 @@ dirs via `clone_host`.
 | **Full Suite** | Everything including A1111, LTX-Video, CogVideoX, VS Code | ~170GB | ~90min |
 | **Custom** | User picks individual apps | varies | varies |
 
-Always installed in all bundles: **Fooocus** (Midjourney-style UI), **Chrome**, GIMP, Krita, Kdenlive, Audacity, Inkscape, ComfyUI, FFmpeg, Blender, WhisperX.
+Always installed in all bundles: **Chrome**, GIMP, Krita, Kdenlive, Audacity, Inkscape, **ComfyUI** (image generation, port 8188), FFmpeg, Blender, MusicGen.
 
 **No SSH needed.** Setup prints public URLs for every service. Inside the desktop, Chrome opens the portal automatically.
 
@@ -428,9 +428,9 @@ Always installed in all bundles: **Fooocus** (Midjourney-style UI), **Chrome**, 
 |---|---|---|
 | 9080 | **AGH Portal** | Start here — links to everything |
 | 6080 | Desktop (noVNC) | Full XFCE desktop |
-| 7865 | Fooocus | Midjourney-style image gen |
+| 8188 | ComfyUI | Image generation + advanced AI workflows |
 | 7870 | Wan2.1 Video | AI video generator, no time limits |
-| 8188 | ComfyUI | Advanced AI workflows |
+| 7871 | AGH Video Studio | HunyuanVideo / LTX / CogVideoX (Creator, Full) |
 | 7860 | Stable Diffusion A1111 | Full Suite only |
 | 8888 | JupyterLab | Dev Tools only |
 | 8080 | VS Code | Dev Tools only |
@@ -439,6 +439,29 @@ Always installed in all bundles: **Fooocus** (Midjourney-style UI), **Chrome**, 
 ```bash
 ssh -L 9080:127.0.0.1:9080 shadeform@<SERVER_IP>
 # then open http://localhost:9080
+```
+
+### All commands (provision, verify, smoke-test, demos)
+
+The complete command + parameter guide — every bundle, the `verify_bundle.sh` and
+`smoke_test.sh` options, and both promo demos — lives in
+**[`AGH-COMMANDS-REFERENCE.md`](AGH-COMMANDS-REFERENCE.md)**. Quick start:
+
+```bash
+RAW=https://raw.githubusercontent.com/niksresearch/agh-installations/main
+
+# provision Bundle 2 (Creator)
+wget -qO setup_creative_suite.sh $RAW/setup_creative_suite.sh
+sudo BUNDLE=2 VNC_PASS=yourpass HF_TOKEN=hf_xxx nohup bash setup_creative_suite.sh > setup.log 2>&1 &
+
+# verify everything installed + running
+wget -qO verify_bundle.sh $RAW/verify_bundle.sh && sudo bash verify_bundle.sh 2
+
+# smoke-test each tool (lite = fast sanity, heavy = real load)
+wget -qO smoke_test.sh $RAW/smoke_test.sh && sudo bash smoke_test.sh heavy all
+
+# run the Bundle 2 promo
+wget -qO demo_creative_suite_v2.sh $RAW/demo_creative_suite_v2.sh && sudo bash demo_creative_suite_v2.sh
 ```
 
 Product doc: `AGH-CREATIVE-SUITE-PRODUCT.md`
