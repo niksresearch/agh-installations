@@ -14,6 +14,7 @@ RAW=https://raw.githubusercontent.com/niksresearch/agh-installations/main
 | `setup_creative_suite.sh` | Provision a bundle (desktop + AI apps + models) |
 | `verify_bundle.sh` | Check every component a bundle should have is present + running |
 | `smoke_test.sh` | Tiny per-tool generation test (lite/heavy) before the full demo |
+| `benchmark.sh` | Per-model performance sheet — time, peak VRAM, output spec, cost, tokens |
 | `demo_creative_suite.sh` | Bundle 1 promo (real AGH branding + images + Wan2.1 + music) |
 | `demo_creative_suite_v2.sh` | Bundle 2 "Director's Cut" promo (FLUX + ESRGAN + Hunyuan + Bark) |
 
@@ -105,8 +106,11 @@ sudo bash smoke_test.sh [lite|heavy] [test names | all]
 ```
 
 - **Arg 1** (optional): `lite` (default) or `heavy` — size/length profile
-- **Remaining args**: test names, or `all`. Default (none) = `image upscale music voice`
-- **Test names**: `image upscale music voice wan21 hunyuan`
+- **Remaining args**: test names, `all` (Bundle 1/2 tools), or `b3` (all tools incl. Bundle 3).
+  Default (none) = `image upscale music voice`
+- **Test names**: `image upscale music voice wan21 hunyuan ltx cogvideo a1111`
+- Tools not installed in the current bundle are **SKIPPED** (○), not failed — so `b3` on a
+  Bundle 2 VM cleanly skips `ltx`/`cogvideo`/`a1111`.
 
 | Parameter | lite | heavy |
 |---|---|---|
@@ -114,14 +118,18 @@ sudo bash smoke_test.sh [lite|heavy] [test names | all]
 | Music | 5s | 120s (2-min track) |
 | Wan2.1 | 81 frames, 10 steps | 161 frames, 40 steps |
 | HunyuanVideo | 25 frames, 512×320, 15 steps | 129 frames, 960×544, 30 steps |
+| LTX-Video (B3) | 49 frames, 20 steps | 121 frames, 30 steps |
+| CogVideoX-5B (B3) | 49 frames, 20 steps | 49 frames, 50 steps |
+| A1111 (B3) | 512×512, 12 steps | 1280×720, 30 steps |
 
 ### Examples
 ```bash
 sudo bash smoke_test.sh                 # lite, core 4 (image upscale music voice)
-sudo bash smoke_test.sh lite all        # lite, all 6 incl. video
-sudo bash smoke_test.sh heavy all       # big sizes + long clips, all 6
+sudo bash smoke_test.sh lite all        # lite, Bundle 1/2 tools (+ wan21 hunyuan)
+sudo bash smoke_test.sh heavy all       # big sizes + long clips, Bundle 1/2 tools
+sudo bash smoke_test.sh lite b3         # lite, ALL tools incl. Bundle 3 (ltx cogvideo a1111)
+sudo bash smoke_test.sh heavy b3        # full Bundle 3 real-load run
 sudo bash smoke_test.sh heavy image     # just a 720p image
-sudo bash smoke_test.sh heavy music     # just a 2-min music track
 ```
 
 ### Outputs & log
@@ -135,6 +143,40 @@ Notes:
 - `upscale` reuses `image`'s output — run `image` first (default order does this).
 - Heavy video tests run **one at a time** — never two GPU jobs at once.
 - Bark / Hunyuan download their model on first run — first pass is slower.
+
+---
+
+## 3b. Benchmark (performance / spec sheet)
+
+`benchmark.sh` measures each model's **time, peak VRAM, output spec, throughput, and
+derived cost** — the numbers you publish on a spec/sales sheet. Chat models also get
+prompt/completion **tokens** + tokens/sec (image/video/audio have no tokens; their
+units are steps/frames/seconds).
+
+```bash
+wget -qO benchmark.sh $RAW/benchmark.sh
+sudo bash benchmark.sh                        # all installed creative models
+sudo bash benchmark.sh image video            # only these groups
+sudo GPU_RATE=2.50 bash benchmark.sh          # fill the cost column ($/GPU-hour)
+sudo CHAT_URL=http://127.0.0.1:8000/v1 CHAT_MODEL=llama3 bash benchmark.sh chat
+```
+
+- **Groups:** `image video audio upscale chat` (default: all)
+- **Config env:** `GPU_RATE` ($/GPU-hour → cost column), `CHAT_URL` + `CHAT_MODEL`
+  (+ optional `CHAT_KEY`) for the chat benchmark against an OpenAI-compatible endpoint
+  (e.g. the AGH LLM suite gateway).
+- Uninstalled tools are skipped. Video models run one at a time. First run of
+  Hunyuan/CogVideoX/LTX downloads its model (slower).
+
+**Outputs:**
+```
+/tmp/agh-bench/results.csv    # machine-readable
+/tmp/agh-bench/results.md     # sales-ready Markdown table (GPU, per-model rows, cost)
+```
+
+Representative jobs benchmarked: FLUX/SDXL 1024² image (25 steps), Wan2.1 720p 81f,
+LTX 97f, CogVideoX 49f, Hunyuan 61f, Real-ESRGAN 4×, MusicGen 30s, Bark 1 sentence,
+and (if configured) a 150-word chat completion.
 
 ---
 
