@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# AGH Creative Suite — Bundle 2 smoke test
+# AGH Creative Suite — smoke test (all bundles)
 #
-# Runs a tiny, fast job against each Bundle 2 tool to confirm it works BEFORE
-# running the full demo_creative_suite_v2.sh. Writes a clean PASS/FAIL log.
+# Runs a tiny, fast job against each installed tool to confirm it works BEFORE
+# running the full promo demo. Writes a clean PASS/FAIL/SKIP log with timing.
+# Tools not installed in the current bundle are SKIPPED (not failed).
 #
 # Usage:
 #   sudo bash smoke_test.sh                    # lite mode, core tests (image upscale music voice)
-#   sudo bash smoke_test.sh lite all           # lite params, ALL tests incl. video
-#   sudo bash smoke_test.sh heavy all          # BIG sizes + long clips, all tests
+#   sudo bash smoke_test.sh lite all           # lite, Bundle 1/2 tools (+ wan21 hunyuan)
+#   sudo bash smoke_test.sh heavy all          # BIG sizes + long clips, Bundle 1/2 tools
+#   sudo bash smoke_test.sh lite b3            # lite, ALL tools incl. Bundle 3 (ltx cogvideo a1111)
+#   sudo bash smoke_test.sh heavy b3           # full Bundle 3 real-load run
 #   sudo bash smoke_test.sh heavy image music  # big image + 2-min music only
 #
 # Arg 1 (optional): lite | heavy   — size/length profile (default lite)
-# Remaining args  : test names, or "all". Default (none) = image upscale music voice
-# Test names      : image upscale music voice wan21 hunyuan
+# Remaining args  : test names, or "all" (B1/B2 tools) or "b3" (all incl. Bundle 3).
+#                   Default (none) = image upscale music voice
+# Test names      : image upscale music voice wan21 hunyuan ltx cogvideo a1111
 #
 #   lite  : 512px image/12 steps, 5s music, short low-res video    — fast sanity
 #   heavy : 1280x720 image/30 steps, 120s music, long hi-res video — real-load test
@@ -51,11 +55,15 @@ if [[ "$MODE" == "heavy" ]]; then
   MUSIC_DUR=120                                  # 2-minute track
   WAN_STEPS=40;  WAN_FRAMES=161; WAN_SIZE="1280*720"   # ~10s @16fps, hi-res
   HUN_FRAMES=129; HUN_W=960; HUN_H=544; HUN_STEPS=30   # ~10s, hi-res
+  LTX_FRAMES=121; LTX_STEPS=30                          # LTX-Video (Bundle 3)
+  COG_FRAMES=49;  COG_STEPS=50                          # CogVideoX-5B (Bundle 3, 49 frames fixed)
 else
   IMG_W=512;  IMG_H=512;  IMG_STEPS=12
   MUSIC_DUR=5
   WAN_STEPS=10;  WAN_FRAMES=81;  WAN_SIZE="1280*720"
   HUN_FRAMES=25;  HUN_W=512; HUN_H=320; HUN_STEPS=15
+  LTX_FRAMES=49;  LTX_STEPS=20
+  COG_FRAMES=49;  COG_STEPS=20
 fi
 
 # Shared video prompt — same text for Wan2.1 and HunyuanVideo so the two clips are
@@ -63,28 +71,32 @@ fi
 SMOKE_PROMPT="A futuristic AI creative studio, holographic screens displaying glowing artwork, blue and purple particles drifting through the air, slow cinematic camera push forward, photorealistic, smooth motion, 4K"
 
 # ── Which tests ───────────────────────────────────────────────────────────────
-CORE=(image upscale music voice)
-ALL=(image upscale music voice wan21 hunyuan)
+CORE=(image upscale music voice)                                   # always-available
+ALL=(image upscale music voice wan21 hunyuan)                      # Bundle 1/2 tools
+B3=(image upscale music voice wan21 hunyuan ltx cogvideo a1111)    # + Bundle 3-only tools
 if [[ $# -eq 0 ]]; then
   TESTS=("${CORE[@]}")
 elif [[ "${1:-}" == "all" ]]; then
   TESTS=("${ALL[@]}")
+elif [[ "${1:-}" == "b3" || "${1:-}" == "all3" ]]; then
+  TESTS=("${B3[@]}")
 else
   TESTS=("$@")
 fi
 
+# Test fns return: 0 = PASS, 2 = SKIP (tool not installed in this bundle), other = FAIL.
 declare -A RESULT TIMING
 run_test() {
-  local name="$1" fn="$2" start end
+  local name="$1" fn="$2" start end rc
   log "${CYAN}▶ ${name}${NC} — running..."
   start=$(date +%s)
-  if "$fn"; then RESULT[$name]="PASS"; else RESULT[$name]="FAIL"; fi
+  "$fn"; rc=$?
   end=$(date +%s); TIMING[$name]=$(( end - start ))
-  if [[ "${RESULT[$name]}" == "PASS" ]]; then
-    log "  ${GREEN}✓ ${name} PASS${NC} (${TIMING[$name]}s)"
-  else
-    log "  ${RED}✗ ${name} FAIL${NC} (${TIMING[$name]}s) — see ${OUT}/${name}.err"
-  fi
+  case "$rc" in
+    0) RESULT[$name]="PASS"; log "  ${GREEN}✓ ${name} PASS${NC} (${TIMING[$name]}s)" ;;
+    2) RESULT[$name]="SKIP"; log "  ${YELLOW}○ ${name} SKIP${NC} — not installed in this bundle" ;;
+    *) RESULT[$name]="FAIL"; log "  ${RED}✗ ${name} FAIL${NC} (${TIMING[$name]}s) — see ${OUT}/${name}.err" ;;
+  esac
 }
 
 # ── Test functions (return 0 = pass) ──────────────────────────────────────────
@@ -149,6 +161,7 @@ PY
 }
 
 t_voice() {
+  [[ -d /opt/voice-env ]] || { echo "Bark (/opt/voice-env) not installed" > "${OUT}/voice.err"; return 2; }
   inpod "
 source /opt/voice-env/bin/activate
 python - <<'PY' 2>>${OUT}/voice.err
@@ -165,6 +178,7 @@ PY
 }
 
 t_wan21() {
+  [[ -d /opt/Wan2.1 ]] || { echo "Wan2.1 (/opt/Wan2.1) not installed" > "${OUT}/wan21.err"; return 2; }
   log "    (heavy — ~73GB VRAM; GPU must be free)  steps:${WAN_STEPS} frames:${WAN_FRAMES} size:${WAN_SIZE}"
   inpod "
 source /opt/wan21-env/bin/activate
@@ -180,6 +194,7 @@ python generate.py --task t2v-14B --size ${WAN_SIZE} \
 }
 
 t_hunyuan() {
+  [[ -d /opt/agh-video-env ]] || { echo "AGH Video Studio (/opt/agh-video-env) not installed" > "${OUT}/hunyuan.err"; return 2; }
   log "    (heavy — downloads model on first run, slow)  frames:${HUN_FRAMES} size:${HUN_W}x${HUN_H} steps:${HUN_STEPS}"
   inpod "
 source /opt/agh-video-env/bin/activate
@@ -200,12 +215,67 @@ PY
   [[ -s "${OUT}/hunyuan.mp4" ]] && { log "    -> ${OUT}/hunyuan.mp4"; return 0; } || return 1
 }
 
+t_ltx() {
+  [[ -d /opt/agh-video-env ]] || { echo "AGH Video Studio (/opt/agh-video-env) not installed — Bundle 3 only" > "${OUT}/ltx.err"; return 2; }
+  log "    (LTX-Video, fast)  frames:${LTX_FRAMES} size:768x512 steps:${LTX_STEPS}"
+  inpod "
+source /opt/agh-video-env/bin/activate
+export HF_HOME=${MODELS_DIR}/hf-cache
+python - <<'PY' 2>>${OUT}/ltx.err
+import torch
+from diffusers import LTXPipeline
+from diffusers.utils import export_to_video
+pipe=LTXPipeline.from_pretrained('Lightricks/LTX-Video', torch_dtype=torch.bfloat16)
+pipe.enable_model_cpu_offload()
+v=pipe(prompt='${SMOKE_PROMPT}', width=768, height=512, num_frames=${LTX_FRAMES}, num_inference_steps=${LTX_STEPS}).frames[0]
+export_to_video(v, '${OUT}/ltx.mp4', fps=24)
+print('ok')
+PY
+"
+  [[ -s "${OUT}/ltx.mp4" ]] && { log "    -> ${OUT}/ltx.mp4"; return 0; } || return 1
+}
+
+t_cogvideo() {
+  [[ -d /opt/agh-video-env ]] || { echo "AGH Video Studio (/opt/agh-video-env) not installed — Bundle 3 only" > "${OUT}/cogvideo.err"; return 2; }
+  log "    (CogVideoX-5B, downloads model on first run)  frames:${COG_FRAMES} steps:${COG_STEPS}"
+  inpod "
+source /opt/agh-video-env/bin/activate
+export HF_HOME=${MODELS_DIR}/hf-cache
+python - <<'PY' 2>>${OUT}/cogvideo.err
+import torch
+from diffusers import CogVideoXPipeline
+from diffusers.utils import export_to_video
+pipe=CogVideoXPipeline.from_pretrained('THUDM/CogVideoX-5b', torch_dtype=torch.bfloat16)
+pipe.enable_model_cpu_offload(); pipe.vae.enable_tiling()
+v=pipe(prompt='${SMOKE_PROMPT}', num_frames=${COG_FRAMES}, guidance_scale=6.0, num_inference_steps=${COG_STEPS}).frames[0]
+export_to_video(v, '${OUT}/cogvideo.mp4', fps=8)
+print('ok')
+PY
+"
+  [[ -s "${OUT}/cogvideo.mp4" ]] && { log "    -> ${OUT}/cogvideo.mp4"; return 0; } || return 1
+}
+
+t_a1111() {
+  [[ -d /opt/stable-diffusion-webui ]] || { echo "A1111 (/opt/stable-diffusion-webui) not installed — Bundle 3 only" > "${OUT}/a1111.err"; return 2; }
+  # Needs the API enabled (setup launches launch.py with --api).
+  if ! curl -s --connect-timeout 3 "http://127.0.0.1:7860/sdapi/v1/sd-models" >/dev/null 2>&1; then
+    echo "A1111 API not reachable on :7860 (is it still starting, or launched without --api?)" > "${OUT}/a1111.err"; return 1
+  fi
+  log "    (A1111 REST API)  size:${IMG_W}x${IMG_H} steps:${IMG_STEPS}"
+  local SEED=$(( (RANDOM<<15) ^ RANDOM ))
+  curl -s -X POST "http://127.0.0.1:7860/sdapi/v1/txt2img" -H "Content-Type: application/json" \
+    -d "{\"prompt\":\"a glowing blue robot, simple\",\"negative_prompt\":\"blurry\",\"steps\":${IMG_STEPS},\"width\":${IMG_W},\"height\":${IMG_H},\"seed\":${SEED},\"cfg_scale\":7}" \
+    2>>"${OUT}/a1111.err" \
+    | python3 -c "import sys,json,base64;d=json.load(sys.stdin);open('${OUT}/a1111.png','wb').write(base64.b64decode(d['images'][0]))" 2>>"${OUT}/a1111.err"
+  [[ -s "${OUT}/a1111.png" ]] && { log "    -> ${OUT}/a1111.png"; return 0; } || return 1
+}
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 log "${BOLD}════════════════════════════════════════════════════════════════${NC}"
-log "${BOLD}  AGH Bundle 2 smoke test${NC}"
+log "${BOLD}  AGH Creative Suite smoke test${NC}"
 SCRIPT_START=$(date +%s)
 log "  Started:    $(date '+%Y-%m-%d %H:%M:%S')"
-log "  Mode:       ${MODE}  (image ${IMG_W}x${IMG_H}/${IMG_STEPS}st · music ${MUSIC_DUR}s · wan ${WAN_FRAMES}f/${WAN_STEPS}st · hunyuan ${HUN_FRAMES}f)"
+log "  Mode:       ${MODE}  (image ${IMG_W}x${IMG_H}/${IMG_STEPS}st · music ${MUSIC_DUR}s · wan ${WAN_FRAMES}f · hunyuan ${HUN_FRAMES}f · ltx ${LTX_FRAMES}f · cog ${COG_FRAMES}f)"
 log "  Models dir: ${MODELS_DIR}"
 log "  Tests:      ${TESTS[*]}"
 log "  Outputs:    ${OUT}/"
@@ -217,8 +287,11 @@ for t in "${TESTS[@]}"; do
     upscale) run_test upscale t_upscale ;;
     music)   run_test music   t_music   ;;
     voice)   run_test voice   t_voice   ;;
-    wan21)   run_test wan21   t_wan21   ;;
-    hunyuan) run_test hunyuan t_hunyuan ;;
+    wan21)    run_test wan21    t_wan21    ;;
+    hunyuan)  run_test hunyuan  t_hunyuan  ;;
+    ltx)      run_test ltx      t_ltx      ;;
+    cogvideo) run_test cogvideo t_cogvideo ;;
+    a1111)    run_test a1111    t_a1111    ;;
     *) log "${YELLOW}skip unknown test: ${t}${NC}" ;;
   esac
 done
@@ -226,21 +299,21 @@ done
 # ── Summary ───────────────────────────────────────────────────────────────────
 log ""
 log "${BOLD}──────────────── SUMMARY ────────────────${NC}"
-fails=0
+fails=0; skips=0
 for t in "${TESTS[@]}"; do
   [[ -n "${RESULT[$t]:-}" ]] || continue
-  if [[ "${RESULT[$t]}" == "PASS" ]]; then
-    log "  ${GREEN}✓${NC} ${t}  (${TIMING[$t]}s)"
-  else
-    log "  ${RED}✗${NC} ${t}  (${TIMING[$t]}s)"; fails=$((fails+1))
-  fi
+  case "${RESULT[$t]}" in
+    PASS) log "  ${GREEN}✓${NC} ${t}  (${TIMING[$t]}s)" ;;
+    SKIP) log "  ${YELLOW}○${NC} ${t}  (skipped — not in this bundle)"; skips=$((skips+1)) ;;
+    *)    log "  ${RED}✗${NC} ${t}  (${TIMING[$t]}s)"; fails=$((fails+1)) ;;
+  esac
 done
 log "${BOLD}─────────────────────────────────────────${NC}"
 TOTAL=$(( $(date +%s) - SCRIPT_START ))
-log "  Total time: ${TOTAL}s ($(( TOTAL / 60 ))m $(( TOTAL % 60 ))s)   Mode: ${MODE}"
+log "  Total time: ${TOTAL}s ($(( TOTAL / 60 ))m $(( TOTAL % 60 ))s)   Mode: ${MODE}   Skipped: ${skips}"
 log "  Finished:   $(date '+%H:%M:%S')   Log: ${LOG}"
 if [[ "$fails" -eq 0 ]]; then
-  log "  ${GREEN}${BOLD}ALL PASS${NC} — Bundle 2 ready. Run demo_creative_suite_v2.sh."
+  log "  ${GREEN}${BOLD}ALL PASS${NC} — every installed tool works. Ready to run the promo demo."
   exit 0
 else
   log "  ${RED}${BOLD}${fails} FAILED${NC} — check ${OUT}/<name>.err before running the demo."

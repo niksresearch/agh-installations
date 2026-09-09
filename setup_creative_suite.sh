@@ -646,16 +646,19 @@ python -c 'from audiocraft.models import MusicGen; MusicGen.get_pretrained(\"mel
 }
 
 install_bark() {
-  info "Installing Bark TTS + OpenVoice (~5GB)..."
+  # Bark only. OpenVoice was dropped: its requirements pin an old PyAV (av) with no
+  # cp310 wheel, forcing a source build that fails under Cython 3
+  # ("Cannot assign type ... noexcept" in av/logging.pyx). No demo uses OpenVoice —
+  # demo v2 + smoke_test call Bark's generate_audio only.
+  info "Installing Bark TTS (~5GB)..."
   nsenter -t "${POD_PID}" -m -- bash -c "
 python3 -m venv /opt/voice-env
 source /opt/voice-env/bin/activate
+pip install --quiet wheel setuptools
 pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install --quiet bark
-git clone https://github.com/myshell-ai/OpenVoice /opt/OpenVoice 2>/dev/null || \
-  (cd /opt/OpenVoice && git pull)
-pip install --quiet -r /opt/OpenVoice/requirements.txt
-" && success "Bark TTS + OpenVoice installed." || warn "Voice tools install failed."
+pip install --quiet bark scipy 'numpy<2'
+python -c 'from bark import SAMPLE_RATE, generate_audio, preload_models' 2>/dev/null
+" && success "Bark TTS installed." || warn "Bark install failed."
 }
 
 install_devtools() {
@@ -957,7 +960,7 @@ if [[ -d /opt/stable-diffusion-webui ]]; then
   nsenter -t "${POD_PID}" -m -- bash -c "
 source /opt/a1111-env/bin/activate
 cd /opt/stable-diffusion-webui
-TMPDIR=${TMPDIR_OVERRIDE} nohup python launch.py --listen --port 7860 --xformers --no-half-vae \
+TMPDIR=${TMPDIR_OVERRIDE} nohup python launch.py --listen --port 7860 --xformers --no-half-vae --api \
   > ${DATA_DIR}/a1111.log 2>&1 &
 " && success "Stable Diffusion starting on port 7860." || warn "A1111 start failed."
   SERVICE_PORTS[a1111]=7860
