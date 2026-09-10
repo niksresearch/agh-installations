@@ -714,8 +714,12 @@ apt-get install -y --no-install-recommends \
   gimp krita kdenlive audacity inkscape \
   mpv eog \
   python3-pip python3-venv git curl wget \
+  build-essential pkg-config cargo rustc \
   2>/dev/null
 command -v wget >/dev/null || echo '[WARN] wget still missing after apt install'
+# Rust (cargo/rustc) is needed on Ubuntu 24.04 (Python 3.12): several pinned deps
+# (e.g. tokenizers) have no cp312 wheel and build from source, which requires Rust.
+command -v cargo >/dev/null || echo '[WARN] cargo missing — source builds (tokenizers) may fail'
 
 # Chrome
 wget -qO /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
