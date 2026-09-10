@@ -631,7 +631,18 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get install -y --no-install-recommends \
   pkg-config libavformat-dev libavcodec-dev libavdevice-dev \
   libavutil-dev libavfilter-dev libswscale-dev libswresample-dev 2>/dev/null
-python3 -m venv /opt/audio-env
+# audiocraft does NOT build on Python 3.12 (Ubuntu 24.04's default). Use a dedicated
+# Python 3.10 venv via deadsnakes; on 22.04 the system python3 is already 3.10 so this
+# is a no-op safety net.
+PYAUDIO=python3.10
+if ! command -v \$PYAUDIO >/dev/null 2>&1; then
+  apt-get install -y --no-install-recommends software-properties-common 2>/dev/null
+  add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || true
+  apt-get update -y 2>/dev/null || true
+  apt-get install -y --no-install-recommends python3.10 python3.10-venv python3.10-dev 2>/dev/null
+fi
+command -v \$PYAUDIO >/dev/null 2>&1 || { echo '[WARN] python3.10 unavailable — MusicGen may fail on 3.12'; PYAUDIO=python3; }
+\$PYAUDIO -m venv /opt/audio-env
 source /opt/audio-env/bin/activate
 pip install --quiet wheel setuptools
 pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
@@ -781,6 +792,10 @@ git clone https://github.com/comfyanonymous/ComfyUI /opt/ComfyUI 2>/dev/null || 
   (cd /opt/ComfyUI && git pull)
 pip install --quiet -r /opt/ComfyUI/requirements.txt
 pip install --quiet gradio diffusers transformers accelerate
+# ComfyUI's newer comfy_kitchen backend declares ops with list[int] schemas, which
+# torch<2.4 rejects ('unsupported type list[int]') and crashes ComfyUI on start.
+# A requirements dep can pin an older torch, so force >=2.4 AFTER requirements install.
+pip install --quiet --upgrade 'torch>=2.4' torchvision --index-url https://download.pytorch.org/whl/cu121
 mkdir -p ${MODELS_DIR}/comfyui/{checkpoints,loras,vae,clip,unet,controlnet,upscale_models}
 rm -rf /opt/ComfyUI/models
 ln -sfn ${MODELS_DIR}/comfyui /opt/ComfyUI/models

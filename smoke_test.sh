@@ -179,6 +179,10 @@ PY
 
 t_wan21() {
   [[ -d /opt/Wan2.1 ]] || { echo "Wan2.1 (/opt/Wan2.1) not installed" > "${OUT}/wan21.err"; return 2; }
+  local vram; vram=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo 0)
+  if [[ "${vram:-0}" -lt 75000 ]]; then
+    echo "GPU has ${vram}MB (<75GB) — Wan2.1 14B needs ~73GB, skipping" > "${OUT}/wan21.err"; return 2
+  fi
   log "    (heavy — ~73GB VRAM; GPU must be free)  steps:${WAN_STEPS} frames:${WAN_FRAMES} size:${WAN_SIZE}"
   inpod "
 source /opt/wan21-env/bin/activate

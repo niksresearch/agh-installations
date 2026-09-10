@@ -123,6 +123,14 @@ GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head 
 
 # ── Detect installed Bundle 2 tools ───────────────────────────────────────────
 HAS_WAN21=false;    [[ -d /opt/Wan2.1 && -d "${MODELS_DIR}/wan21" ]] && HAS_WAN21=true
+# Wan2.1 14B needs ~73GB VRAM. On <75GB cards (e.g. A100-40GB) it OOMs, so skip it
+# and lead the video with HunyuanVideo (fits via cpu-offload). Full quality returns
+# automatically on an 80GB card.
+GPU_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo 0)
+if [[ "$HAS_WAN21" == "true" && "${GPU_VRAM_MB:-0}" -lt 75000 ]]; then
+  HAS_WAN21=false
+  ulog "  [note] GPU has ${GPU_VRAM_MB}MB (<75GB) — skipping Wan2.1 (won't fit); using HunyuanVideo."
+fi
 HAS_HUNYUAN=false;  [[ -d /opt/agh-video-env ]] && HAS_HUNYUAN=true
 HAS_BARK=false;     nsenter -t "${POD_PID}" -m -- bash -c "source /opt/voice-env/bin/activate 2>/dev/null && python -c 'import bark' 2>/dev/null" && HAS_BARK=true || true
 HAS_MUSICGEN=false; nsenter -t "${POD_PID}" -m -- bash -c "source /opt/audio-env/bin/activate 2>/dev/null && python -c 'import audiocraft' 2>/dev/null" && HAS_MUSICGEN=true || true
