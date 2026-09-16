@@ -25,6 +25,9 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 STEP_START=0
+PREV_STEP_LABEL=""      # label of the step currently running (for REPORT.md)
+STEP_TIMES=""           # file collecting "step<TAB>seconds" rows
+RUN_START=0             # wall-clock start of the whole run
 SERVER_IP_CACHE=""
 
 # ulog: write to user log (FD 3) AND debug log (stdout, already redirected)
@@ -62,8 +65,11 @@ step() {
   if [[ "$STEP_START" -gt 0 ]]; then
     local elapsed=$(( now - STEP_START ))
     ulog "[$(date '+%H:%M:%S')]    (took ${elapsed}s)"
+    [[ -n "${PREV_STEP_LABEL:-}" && -n "${STEP_TIMES:-}" ]] && \
+      printf '%s\t%s\n' "${PREV_STEP_LABEL}" "${elapsed}" >> "${STEP_TIMES}" 2>/dev/null || true
   fi
   STEP_START=$now
+  PREV_STEP_LABEL="$*"
   ulog ""
   ulog "[$(date '+%H:%M:%S')] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   ulog "[$(date '+%H:%M:%S')] $*"
@@ -98,6 +104,8 @@ BRAND_DIR="${OUTPUT_DIR}/brand"
 LOG_FILE="${OUTPUT_DIR}/demo.log"
 DEBUG_LOG="${OUTPUT_DIR}/demo-debug.log"
 mkdir -p "${OUTPUT_DIR}/images" "${OUTPUT_DIR}/videos" "${BRAND_DIR}" "${DATA_DIR}/tmp"
+STEP_TIMES="${OUTPUT_DIR}/.steptimes"; : > "${STEP_TIMES}" 2>/dev/null || true
+RUN_START=$(date +%s)
 
 # Fonts (used by branded intro/end cards and watermark)
 FONT_BOLD="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
@@ -661,6 +669,55 @@ if [[ -f "${FINAL}" ]]; then
 else
   warn "No final video produced — check ${DEBUG_LOG}"
 fi
+
+# ── Generation report (REPORT.md) — GPU, models, per-step timing, output specs ─
+[[ "$STEP_START" -gt 0 && -n "${PREV_STEP_LABEL:-}" && -n "${STEP_TIMES:-}" ]] && \
+  printf '%s\t%s\n' "${PREV_STEP_LABEL}" "$(( $(date +%s) - STEP_START ))" >> "${STEP_TIMES}" 2>/dev/null || true
+
+REPORT="${OUTPUT_DIR}/REPORT.md"
+RUN_SECS=$(( $(date +%s) - ${RUN_START:-$(date +%s)} ))
+GPU_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | head -1)
+{
+  echo "# AGH Creative Suite — Generation Report (Bundle 1)"
+  echo ""
+  echo "- **Created:**    $(date '+%Y-%m-%d %H:%M:%S %Z')"
+  echo "- **Total time:** $(( RUN_SECS / 60 ))m $(( RUN_SECS % 60 ))s"
+  echo "- **GPU:**        ${GPU_NAME}${GPU_VRAM:+ (${GPU_VRAM})}"
+  echo "- **Host:**       $(hostname 2>/dev/null || echo n/a)"
+  echo "- **Output dir:** ${OUTPUT_DIR}"
+  echo ""
+  echo "## Final video"
+  if [[ -f "${FINAL}" ]]; then
+    VSPEC=$(nsenter -t "${POD_PID}" -m -- ffprobe -v error -select_streams v:0 \
+      -show_entries stream=width,height,r_frame_rate -show_entries format=duration \
+      -of default=nw=1 "${FINAL}" 2>/dev/null | tr '\n' ' ')
+    echo "- File: \`$(basename "${FINAL}")\`"
+    echo "- Size: $(du -h "${FINAL}" 2>/dev/null | cut -f1)"
+    echo "- Spec: ${VSPEC:-n/a}"
+  else
+    echo "- (no final video produced)"
+  fi
+  echo ""
+  echo "## Steps (tool / model + time)"
+  echo ""
+  echo "| Step | Time |"
+  echo "|---|---|"
+  if [[ -s "${STEP_TIMES}" ]]; then
+    while IFS=$'\t' read -r label secs; do
+      printf '| %s | %ss |\n' "${label}" "${secs}"
+    done < "${STEP_TIMES}"
+  fi
+  echo ""
+  echo "## Artifacts & models"
+  echo "- Brand images: $(ls "${OUTPUT_DIR}"/images/*.png 2>/dev/null | wc -l | tr -d ' ') (ComfyUI / SD)"
+  [[ -f "${OUTPUT_DIR}/s3_logo.mp4" ]] && echo "- 3D logo: Blender EEVEE" || true
+  [[ -f "${OUTPUT_DIR}/s4_video.mp4" ]] && echo "- Video: Wan2.1-14B" || echo "- Video: Wan2.1 not produced"
+  [[ -f "${OUTPUT_DIR}/music.wav" ]] && echo "- Music: MusicGen" || echo "- Music: MusicGen not produced"
+  echo "- Assembly: FFmpeg"
+  echo ""
+  echo "_Made entirely with AGH Creative Suite — you are watching the product._"
+} > "${REPORT}" 2>/dev/null
+[[ -f "${REPORT}" ]] && { ulog ""; ulog "  📄 Generation report: ${REPORT}"; show_output "Generation Report" "${REPORT}"; }
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 TOTAL_TIME=$(( $(date +%s) - STEP_START ))

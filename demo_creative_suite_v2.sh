@@ -4,7 +4,7 @@
 # Sibling of demo_creative_suite.sh (which targets Bundle 1 "Starter").
 # This version showcases the Bundle 2 upgrades end-to-end:
 #   • Real AGH brand assets fetched from aghcloud.ai (logo + banner)
-#   • FLUX images (ComfyUI) with automatic SDXL fallback
+#   • SDXL images via diffusers (no ComfyUI dependency — works on 24.04/py3.12)
 #   • Real-ESRGAN x4 upscale → crisp frames
 #   • Two AI video engines: Wan2.1 + HunyuanVideo (AGH Video Studio diffusers)
 #   • Bark TTS spoken voiceover narration
@@ -24,6 +24,9 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 STEP_START=0
+PREV_STEP_LABEL=""      # label of the step currently running (for REPORT.md)
+STEP_TIMES=""           # file collecting "step<TAB>seconds" rows
+RUN_START=0             # wall-clock start of the whole run
 SERVER_IP_CACHE=""
 
 # ulog: write to user log (FD 3) AND debug log (stdout, already redirected)
@@ -61,8 +64,12 @@ step() {
   if [[ "$STEP_START" -gt 0 ]]; then
     local elapsed=$(( now - STEP_START ))
     ulog "[$(date '+%H:%M:%S')]    (took ${elapsed}s)"
+    # record the just-finished step for REPORT.md
+    [[ -n "${PREV_STEP_LABEL:-}" && -n "${STEP_TIMES:-}" ]] && \
+      printf '%s\t%s\n' "${PREV_STEP_LABEL}" "${elapsed}" >> "${STEP_TIMES}" 2>/dev/null || true
   fi
   STEP_START=$now
+  PREV_STEP_LABEL="$*"
   ulog ""
   ulog "[$(date '+%H:%M:%S')] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   ulog "[$(date '+%H:%M:%S')] $*"
@@ -95,6 +102,8 @@ BRAND_DIR="${OUTPUT_DIR}/brand"
 LOG_FILE="${OUTPUT_DIR}/demo.log"
 DEBUG_LOG="${OUTPUT_DIR}/demo-debug.log"
 mkdir -p "${OUTPUT_DIR}/images" "${OUTPUT_DIR}/images_4k" "${OUTPUT_DIR}/videos" "${BRAND_DIR}" "${DATA_DIR}/tmp"
+STEP_TIMES="${OUTPUT_DIR}/.steptimes"; : > "${STEP_TIMES}" 2>/dev/null || true
+RUN_START=$(date +%s)
 
 # Re-exec into background if not already logging
 if [[ "${DEMO_LOGGING:-0}" != "1" ]]; then
@@ -116,7 +125,14 @@ fi
 exec 3>>"${LOG_FILE}"
 exec >>"${DEBUG_LOG}" 2>&1
 
-POD_PID=$(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}' | head -1)
+# Pick the pod's sleep-infinity whose mount namespace actually contains the tools.
+# A stale/duplicate 'sleep infinity' from an earlier pod gives the wrong namespace
+# (all nsenter calls then fail with 'cannot open /proc/<pid>/ns/mnt'), so probe.
+POD_PID=""
+for _pid in $(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}'); do
+  if nsenter -t "$_pid" -m -- test -d /opt/comfyui-env 2>/dev/null; then POD_PID="$_pid"; break; fi
+done
+[[ -n "$POD_PID" ]] || POD_PID=$(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}' | head -1)
 [[ -n "$POD_PID" ]] || { echo -e "${RED}[ERROR]${NC} Pod not running. Run setup_creative_suite.sh first."; exit 1; }
 
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "GPU")
@@ -230,120 +246,62 @@ if [[ ! -f "${OUTPUT_DIR}/s1_intro.mp4" ]]; then
   success "Title card done."
 fi
 
-# ── Step 2: AI brand images via ComfyUI (FLUX → SDXL → SD1.5) ─────────────────
-step "Step 2/7: AI brand images (ComfyUI — ${IMG_MODE})"
+# ── Step 2: AI brand images via diffusers (SDXL) ──────────────────────────────
+step "Step 2/7: AI brand images (diffusers SDXL)"
 
-COMFYUI_URL="http://127.0.0.1:8188"
+# Generate images with diffusers directly (in the AGH Video Studio venv) instead of
+# ComfyUI. On Ubuntu 24.04 / Python 3.12, ComfyUI's comfy_kitchen backend fails to
+# load (torch rejects its list[int] op schemas), so the ComfyUI API path is dead
+# there. diffusers is already proven on the box (it runs the video models), so images
+# go through it — no ComfyUI, no A1111, no comfy_kitchen dependency.
+SDXL_CKPT="${MODELS_DIR}/comfyui/checkpoints/sd_xl_base_1.0.safetensors"
+[[ -f "$SDXL_CKPT" ]] || SDXL_CKPT="${MODELS_DIR}/comfyui/checkpoints/v1-5-pruned-emaonly.safetensors"
 
-# Emit the right ComfyUI graph JSON for the detected model. SaveImage is always
-# node "7" so the history parser below is identical across models.
-comfy_graph() {
-  local name="$1" prompt="$2"
-  case "$IMG_MODE" in
-    flux)
-      cat <<JSON
-{"prompt":{
-"10":{"class_type":"VAELoader","inputs":{"vae_name":"ae.safetensors"}},
-"11":{"class_type":"DualCLIPLoader","inputs":{"clip_name1":"clip_l.safetensors","clip_name2":"t5xxl_fp8_e4m3fn.safetensors","type":"flux"}},
-"12":{"class_type":"UNETLoader","inputs":{"unet_name":"${FLUX_UNET}","weight_dtype":"fp8_e4m3fn"}},
-"6":{"class_type":"CLIPTextEncode","inputs":{"text":"${prompt}","clip":["11",0]}},
-"60":{"class_type":"CLIPTextEncode","inputs":{"text":"","clip":["11",0]}},
-"5":{"class_type":"EmptyLatentImage","inputs":{"width":1280,"height":720,"batch_size":1}},
-"13":{"class_type":"KSampler","inputs":{"model":["12",0],"positive":["6",0],"negative":["60",0],"latent_image":["5",0],"seed":42,"steps":4,"cfg":1.0,"sampler_name":"euler","scheduler":"simple","denoise":1}},
-"8":{"class_type":"VAEDecode","inputs":{"samples":["13",0],"vae":["10",0]}},
-"7":{"class_type":"SaveImage","inputs":{"images":["8",0],"filename_prefix":"${name}"}}
-}}
-JSON
-      ;;
-    sdxl)
-      cat <<JSON
-{"prompt":{
-"1":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"sd_xl_base_1.0.safetensors"}},
-"2":{"class_type":"CLIPTextEncode","inputs":{"text":"${prompt}","clip":["1",1]}},
-"3":{"class_type":"CLIPTextEncode","inputs":{"text":"blurry, ugly, watermark, low quality","clip":["1",1]}},
-"4":{"class_type":"EmptyLatentImage","inputs":{"width":1024,"height":1024,"batch_size":1}},
-"5":{"class_type":"KSampler","inputs":{"model":["1",0],"positive":["2",0],"negative":["3",0],"latent_image":["4",0],"seed":42,"steps":30,"cfg":7.0,"sampler_name":"dpmpp_2m","scheduler":"karras","denoise":1}},
-"6":{"class_type":"VAEDecode","inputs":{"samples":["5",0],"vae":["1",2]}},
-"7":{"class_type":"SaveImage","inputs":{"images":["6",0],"filename_prefix":"${name}"}}
-}}
-JSON
-      ;;
-    *)
-      cat <<JSON
-{"prompt":{
-"1":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"v1-5-pruned-emaonly.safetensors"}},
-"2":{"class_type":"CLIPTextEncode","inputs":{"text":"${prompt}","clip":["1",1]}},
-"3":{"class_type":"CLIPTextEncode","inputs":{"text":"blurry, ugly, watermark, low quality","clip":["1",1]}},
-"4":{"class_type":"EmptyLatentImage","inputs":{"width":1280,"height":720,"batch_size":1}},
-"5":{"class_type":"KSampler","inputs":{"model":["1",0],"positive":["2",0],"negative":["3",0],"latent_image":["4",0],"seed":42,"steps":25,"cfg":7.5,"sampler_name":"euler","scheduler":"normal","denoise":1}},
-"6":{"class_type":"VAEDecode","inputs":{"samples":["5",0],"vae":["1",2]}},
-"7":{"class_type":"SaveImage","inputs":{"images":["6",0],"filename_prefix":"${name}"}}
-}}
-JSON
-      ;;
-  esac
-}
+PROMPTS=(
+  "agh_workstation|A sleek futuristic AI creative workstation glowing with blue and purple light, multiple holographic screens showing AI-generated artwork, dark minimal setup, cinematic lighting, ultra detailed"
+  "agh_creator|A confident African creative professional in front of multiple screens showing stunning AI-generated videos and images, golden hour light, inspired expression, cinematic aspirational"
+  "agh_abstract_ai|Abstract visualization of artificial intelligence creativity, flowing neural networks forming beautiful art, electric blue and purple particles, deep space background, 8K"
+  "agh_gpu_power|An H100 GPU chip glowing with neon blue light, futuristic close-up macro shot, cinematic dramatic lighting, chrome and silicon textures"
+  "agh_continent|A glowing map of Africa rendered as a circuit board with light flowing across it, data centers lighting up, electric blue and cyan, futuristic, cinematic 8K"
+  "agh_no_limits|A creative studio at night, screens glowing with AI-generated art, inspiring atmosphere, cinematic wide shot, photorealistic"
+)
 
-if [[ "$IMG_MODE" != "none" ]] && curl -s --connect-timeout 3 "${COMFYUI_URL}/system_stats" &>/dev/null; then
-  cmd "curl -X POST ${COMFYUI_URL}/prompt  # ${IMG_MODE} image generation via ComfyUI API"
-  info "This demonstrates: premium AI image generation — unlimited, no credits, no watermarks"
-  [[ "$IMG_MODE" == "flux" ]] && info "Using FLUX — state-of-the-art open image model."
-
-  PROMPTS=(
-    "agh_workstation|A sleek futuristic AI creative workstation glowing with blue and purple light, multiple holographic screens showing AI-generated artwork, dark minimal setup, cinematic lighting, ultra detailed"
-    "agh_creator|A confident African creative professional in front of multiple screens showing stunning AI-generated videos and images, golden hour light, inspired expression, cinematic aspirational"
-    "agh_abstract_ai|Abstract visualization of artificial intelligence creativity, flowing neural networks forming beautiful art, electric blue and purple particles, deep space background, 8K"
-    "agh_gpu_power|An H100 GPU chip glowing with neon blue light, futuristic close-up macro shot, cinematic dramatic lighting, chrome and silicon textures"
-    "agh_continent|A glowing map of Africa rendered as a circuit board with light flowing across it, data centers lighting up, electric blue and cyan, futuristic, cinematic 8K"
-    "agh_no_limits|A creative studio at night, screens glowing with AI-generated art, inspiring atmosphere, cinematic wide shot, photorealistic"
-  )
-
-  for entry in "${PROMPTS[@]}"; do
-    name="${entry%%|*}"
-    prompt="${entry##*|}"
-    out_path="${OUTPUT_DIR}/images/${name}.png"
-    [[ -f "$out_path" ]] && { info "Already exists: ${name}.png"; continue; }
-
-    info "Generating: ${name}..."
-    GRAPH=$(comfy_graph "${name}" "${prompt}")
-    PROMPT_ID=$(curl -s -X POST "${COMFYUI_URL}/prompt" \
-      -H "Content-Type: application/json" \
-      -d "${GRAPH}" \
-      2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('prompt_id',''))" 2>/dev/null || echo "")
-
-    if [[ -z "$PROMPT_ID" ]]; then
-      warn "ComfyUI rejected prompt for ${name} — skipping"
-      continue
-    fi
-
-    # Wait for completion (up to 4 min per image — FLUX/SDXL can be slower)
-    for i in $(seq 1 48); do
-      sleep 5
-      STATUS=$(curl -s "${COMFYUI_URL}/history/${PROMPT_ID}" 2>/dev/null | \
-        python3 -c "import sys,json; d=json.load(sys.stdin); print('done' if d else 'waiting')" 2>/dev/null || echo "waiting")
-      [[ "$STATUS" == "done" ]] && break
-    done
-
-    GENERATED=$(curl -s "${COMFYUI_URL}/history/${PROMPT_ID}" 2>/dev/null | \
-      python3 -c "
-import sys,json
-d=json.load(sys.stdin)
-for k,v in d.items():
-    imgs=v.get('outputs',{}).get('7',{}).get('images',[])
-    if imgs: print(imgs[0]['filename']); break
-" 2>/dev/null || echo "")
-
-    if [[ -n "$GENERATED" ]]; then
-      curl -s "${COMFYUI_URL}/view?filename=${GENERATED}&type=output" -o "${out_path}" 2>/dev/null
-      [[ -f "$out_path" ]] && success "Generated: ${name}.png" || warn "Download failed: ${name}"
-    else
-      warn "No output for ${name}"
-    fi
-  done
-  show_output "AI Images (${IMG_MODE})" "${OUTPUT_DIR}/images"
+if [[ -d /opt/agh-video-env && -f "$SDXL_CKPT" ]]; then
+  cmd "diffusers StableDiffusionXLPipeline.from_single_file(...)(prompt)  # SDXL 1024, loaded once"
+  info "Premium AI image generation via diffusers — unlimited, no credits, no watermarks."
+  # name|prompt list → base64 → python loop (model loaded once for all 6 images)
+  PLIST=""; for entry in "${PROMPTS[@]}"; do PLIST="${PLIST}${entry}"$'\n'; done
+  PLIST_B64=$(printf '%s' "$PLIST" | base64 -w0)
+  nsenter -t "${POD_PID}" -m -- bash -c "
+source /opt/agh-video-env/bin/activate
+export HF_HOME=${MODELS_DIR}/hf-cache
+OUT_IMG='${OUTPUT_DIR}/images' CKPT='${SDXL_CKPT}' PLIST_B64='${PLIST_B64}' python - <<'PY'
+import os, base64, torch
+out=os.environ['OUT_IMG']; os.makedirs(out, exist_ok=True)
+ckpt=os.environ['CKPT']
+entries=[l for l in base64.b64decode(os.environ['PLIST_B64']).decode().splitlines() if l.strip()]
+is_xl='xl' in os.path.basename(ckpt).lower()
+if is_xl:
+    from diffusers import StableDiffusionXLPipeline
+    pipe=StableDiffusionXLPipeline.from_single_file(ckpt, torch_dtype=torch.float16).to('cuda')
+    kw=dict(num_inference_steps=30, guidance_scale=7.0, width=1024, height=1024)
+else:
+    from diffusers import StableDiffusionPipeline
+    pipe=StableDiffusionPipeline.from_single_file(ckpt, torch_dtype=torch.float16).to('cuda')
+    kw=dict(num_inference_steps=25, guidance_scale=7.5, width=768, height=512)
+neg='blurry, ugly, watermark, low quality'
+for e in entries:
+    name, prompt = e.split('|',1)
+    p=os.path.join(out, name+'.png')
+    if os.path.exists(p): print('exists', name); continue
+    img=pipe(prompt=prompt, negative_prompt=neg, **kw).images[0]
+    img.save(p); print('saved', name, img.size)
+print('IMAGES DONE')
+PY
+" && success "Brand images generated (diffusers SDXL)." || warn "Diffusers image generation failed."
+  show_output "AI Images (diffusers SDXL)" "${OUTPUT_DIR}/images"
 else
-  warn "ComfyUI not running or no image model present — skipping AI images."
-  warn "Start ComfyUI (port 8188) or run setup_creative_suite.sh with Bundle 2."
+  warn "diffusers venv (/opt/agh-video-env) or checkpoint missing — skipping AI images."
 fi
 
 # ── Step 3: Real-ESRGAN x4 upscale → crisp frames ─────────────────────────────
@@ -688,6 +646,58 @@ else
   warn "No final video produced — check ${DEBUG_LOG}"
 fi
 
+# ── Generation report (REPORT.md) — GPU, models, per-step timing, output specs ─
+# record the last step's own duration (no later step() call captures it)
+[[ "$STEP_START" -gt 0 && -n "${PREV_STEP_LABEL:-}" && -n "${STEP_TIMES:-}" ]] && \
+  printf '%s\t%s\n' "${PREV_STEP_LABEL}" "$(( $(date +%s) - STEP_START ))" >> "${STEP_TIMES}" 2>/dev/null || true
+
+REPORT="${OUTPUT_DIR}/REPORT.md"
+RUN_SECS=$(( $(date +%s) - ${RUN_START:-$(date +%s)} ))
+GPU_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | head -1)
+{
+  echo "# AGH Creative Suite — Generation Report"
+  echo ""
+  echo "- **Created:**    $(date '+%Y-%m-%d %H:%M:%S %Z')"
+  echo "- **Total time:** $(( RUN_SECS / 60 ))m $(( RUN_SECS % 60 ))s"
+  echo "- **GPU:**        ${GPU_NAME}${GPU_VRAM:+ (${GPU_VRAM})}"
+  echo "- **Host:**       $(hostname 2>/dev/null || echo n/a)"
+  echo "- **Output dir:** ${OUTPUT_DIR}"
+  echo ""
+  echo "## Final video"
+  if [[ -f "${FINAL}" ]]; then
+    VSPEC=$(nsenter -t "${POD_PID}" -m -- ffprobe -v error -select_streams v:0 \
+      -show_entries stream=width,height,r_frame_rate -show_entries format=duration \
+      -of default=nw=1 "${FINAL}" 2>/dev/null | tr '\n' ' ')
+    echo "- File: \`$(basename "${FINAL}")\`"
+    echo "- Size: $(du -h "${FINAL}" 2>/dev/null | cut -f1)"
+    echo "- Spec: ${VSPEC:-n/a}"
+  else
+    echo "- (no final video produced)"
+  fi
+  echo ""
+  echo "## Steps (tool / model + time)"
+  echo ""
+  echo "| Step | Time |"
+  echo "|---|---|"
+  if [[ -s "${STEP_TIMES}" ]]; then
+    while IFS=$'\t' read -r label secs; do
+      printf '| %s | %ss |\n' "${label}" "${secs}"
+    done < "${STEP_TIMES}"
+  fi
+  echo ""
+  echo "## Artifacts & models"
+  echo "- Brand images: $(ls "${OUTPUT_DIR}"/images/*.png 2>/dev/null | wc -l | tr -d ' ') × SDXL (diffusers)"
+  echo "- Upscale: Real-ESRGAN x4 $( [[ -d "${OUTPUT_DIR}/images_4k" ]] && ls "${OUTPUT_DIR}"/images_4k/*.png >/dev/null 2>&1 && echo '(applied)' || echo '(skipped)')"
+  [[ -f "${OUTPUT_DIR}/s4_wan.mp4" ]] && echo "- Video: Wan2.1-14B" || echo "- Video: Wan2.1 skipped (needs 80GB GPU)"
+  [[ -f "${OUTPUT_DIR}/s4b_hunyuan.mp4" ]] && echo "- Video: HunyuanVideo" || true
+  [[ -f "${OUTPUT_DIR}/voiceover.wav" ]] && echo "- Voice: Bark TTS" || true
+  [[ -f "${OUTPUT_DIR}/music.wav" ]] && echo "- Music: MusicGen" || echo "- Music: MusicGen not produced"
+  echo "- Assembly: FFmpeg"
+  echo ""
+  echo "_Made entirely with AGH Creative Suite — you are watching the product._"
+} > "${REPORT}" 2>/dev/null
+[[ -f "${REPORT}" ]] && { ulog ""; ulog "  📄 Generation report: ${REPORT}"; show_output "Generation Report" "${REPORT}"; }
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 TOTAL_TIME=$(( $(date +%s) - STEP_START ))
 
@@ -701,7 +711,7 @@ ulog "  GPU used:  ${GPU_NAME}"
 ulog ""
 ulog "  WHAT JUST HAPPENED (automatically, zero human input):"
 [[ "$HAS_BRAND" == "true" ]]              && ulog "  ✓ Real AGH logo + banner fetched  — aghcloud.ai"
-[[ -f "${OUTPUT_DIR}/s2_images.mp4" ]]    && ulog "  ✓ AI brand images generated       — ComfyUI / ${IMG_MODE}"
+[[ -f "${OUTPUT_DIR}/s2_images.mp4" ]]    && ulog "  ✓ AI brand images generated       — diffusers SDXL"
 [[ -d "${OUTPUT_DIR}/images_4k" ]] && ls "${OUTPUT_DIR}/images_4k"/*.png &>/dev/null \
                                           && ulog "  ✓ Frames upscaled to high-res     — Real-ESRGAN x4"
 [[ -f "${OUTPUT_DIR}/s4_wan.mp4" ]]       && ulog "  ✓ AI video clip generated         — Wan2.1 14B"

@@ -77,6 +77,12 @@ case "$BUNDLE" in
   2) APPS="flux wan21 hunyuan musicgen bark esrgan" ;;
   3) APPS="flux a1111 hunyuan wan21 ltx cogvideo esrgan musicgen bark devtools" ;;
 esac
+# Bundle 3 on >=75GB VRAM auto-installs Wan2.2 + Mochi-1 (see setup_creative_suite.sh
+# pick_bundle) — check for them too so verify matches what setup actually installed.
+GPU_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo 0)
+if [[ "$BUNDLE" == "3" && "${GPU_VRAM_MB:-0}" -ge 75000 ]]; then
+  APPS="${APPS} wan22 mochi"
+fi
 
 echo -e "\n${CYAN}${BOLD}Bundle ${BUNDLE} apps:${NC} ${APPS}"
 for app in $APPS; do
@@ -107,8 +113,13 @@ for app in $APPS; do
     a1111)
       check_dir "Stable Diffusion (A1111)" "/opt/stable-diffusion-webui"
       ;;
-    ltx|cogvideo)
+    ltx|cogvideo|mochi)
       check_dir "AGH Video Studio venv (${app})" "/opt/agh-video-env"
+      ;;
+    wan22)
+      check_dir "Wan2.2 repo"  "/opt/Wan2.2"
+      check_dir "Wan2.2 venv"  "/opt/wan22-env"
+      check_dir "Wan2.2 model" "${MODELS_DIR}/wan22"
       ;;
     devtools)
       inpod "command -v code-server >/dev/null" && ok "VS Code (code-server)" || bad "VS Code (code-server)"

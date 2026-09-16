@@ -104,7 +104,8 @@ banner() {
 [[ $EUID -eq 0 ]] || { error "Run as root: sudo bash $0"; exit 1; }
 
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "not detected")
-info "Host: $(hostname)  |  GPU: ${GPU_NAME}  |  Time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+GPU_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo 0)
+info "Host: $(hostname)  |  GPU: ${GPU_NAME} (${GPU_VRAM_MB} MiB)  |  Time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
 # Detect and use large data disk before any installs
 mount_data_disk
@@ -230,6 +231,10 @@ show_custom_menu() {
   echo -e "  ${BOLD}Dev Tools:${NC}"
   echo -e "  ${CYAN}[10]${NC} VS Code + JupyterLab           (~500MB, ~3min)"
   echo ""
+  echo -e "  ${BOLD}High-end video (needs ~80GB VRAM — H100/H200/A100-80GB):${NC}"
+  echo -e "  ${CYAN}[11]${NC} Wan2.2 (T2V-A14B or TI2V-5B)   (~15-30GB, ~15min)"
+  echo -e "  ${CYAN}[12]${NC} Mochi-1                        (~20GB, ~10min)"
+  echo ""
 
   read -rp "$(echo -e "${BOLD}Enter choices (e.g. \"1 4 5 7\" or \"all\"):${NC} ")" raw_choices
 
@@ -237,9 +242,11 @@ show_custom_menu() {
   app_map[1]="flux" app_map[2]="a1111" app_map[3]="hunyuan" app_map[4]="wan21"
   app_map[5]="ltx"  app_map[6]="cogvideo" app_map[7]="esrgan"
   app_map[8]="musicgen" app_map[9]="bark" app_map[10]="devtools"
+  app_map[11]="wan22" app_map[12]="mochi"
 
   if [[ "$raw_choices" == "all" ]]; then
     SELECTED_APPS="flux a1111 hunyuan wan21 ltx cogvideo esrgan musicgen bark devtools"
+    [[ "${GPU_VRAM_MB:-0}" -ge 75000 ]] && SELECTED_APPS="${SELECTED_APPS} wan22 mochi"
   else
     SELECTED_APPS=""
     for num in $raw_choices; do
@@ -260,6 +267,13 @@ pick_bundle() {
     3) SELECTED_APPS="flux a1111 hunyuan wan21 ltx cogvideo esrgan musicgen bark devtools" ;;
     *) return 1 ;;
   esac
+  # Bundle 3 on a big card (H100/H200/A100-80GB, >=75GB VRAM): add the higher-end
+  # video models. Wan2.1 stays too (auto-skipped at demo/generation time only if
+  # VRAM is short — on 80GB+ it fits fine, so having both gives a quality choice).
+  if [[ "$1" == "3" && "${GPU_VRAM_MB:-0}" -ge 75000 ]]; then
+    SELECTED_APPS="${SELECTED_APPS} wan22 mochi"
+    info "Detected ${GPU_VRAM_MB}MiB VRAM (>=75GB) — adding Wan2.2 + Mochi-1 to Bundle 3."
+  fi
 }
 
 if [[ -n "${BUNDLE:-}" ]]; then
@@ -279,6 +293,7 @@ else
   echo ""
   echo -e "  ${CYAN}[3]${NC} ${BOLD}Full Suite${NC}   Everything                           (~170GB, ~90min)"
   echo -e "         All apps + all AI models"
+  echo -e "         + Wan2.2 and Mochi-1 automatically added on 80GB+ GPUs (H100/H200/A100-80GB)"
   echo ""
   echo -e "  ${CYAN}[4]${NC} ${BOLD}Custom${NC}       Pick your own apps"
   echo ""
@@ -365,6 +380,7 @@ install_video_studio() {
       ltx)      PREFETCH="${PREFETCH} Lightricks/LTX-Video" ;;
       cogvideo) PREFETCH="${PREFETCH} THUDM/CogVideoX-5b" ;;
       hunyuan)  PREFETCH="${PREFETCH} hunyuanvideo-community/HunyuanVideo" ;;
+      mochi)    PREFETCH="${PREFETCH} genmo/mochi-1-preview" ;;
     esac
   done
 
@@ -394,6 +410,11 @@ def load_pipe(model):
         repo = "hunyuanvideo-community/HunyuanVideo"
         tr = HunyuanVideoTransformer3DModel.from_pretrained(repo, subfolder="transformer", torch_dtype=torch.bfloat16)
         pipe = HunyuanVideoPipeline.from_pretrained(repo, transformer=tr, torch_dtype=torch.float16)
+    elif model == "Mochi-1":
+        # Genmo Mochi-1 — high-fidelity, needs a big card (~42GB+ without offload).
+        # Gated to only appear when setup detects >=75GB VRAM (see install_video_studio).
+        from diffusers import MochiPipeline
+        pipe = MochiPipeline.from_pretrained("genmo/mochi-1-preview", torch_dtype=torch.bfloat16)
     else:
         raise ValueError("Unknown model: " + str(model))
     # Stream layers GPU<->CPU + tile VAE so big models fit on a single card
@@ -421,6 +442,8 @@ def generate(model, prompt, steps, frames, fps):
         kwargs.update(num_frames=int(frames), guidance_scale=6.0)
     elif model == "HunyuanVideo":
         kwargs.update(height=320, width=512, num_frames=int(frames))
+    elif model == "Mochi-1":
+        kwargs.update(height=480, width=848, num_frames=int(frames))
     try:
         result = pipe(**kwargs)
         video = result.frames[0]
@@ -604,6 +627,56 @@ PYEOF
 echo '${GRADIO_B64}' | base64 -d > /opt/Wan2.1/gradio_app.py
 "
   success "Wan2.1 installed with Gradio UI on port 7870."
+}
+
+# Wan2.2 — Alibaba's follow-up to Wan2.1. Two checkpoint tiers:
+#   TI2V-5B  (~5B, unified T2V+I2V) — fits most single GPUs (~24GB+)
+#   T2V-A14B (MoE, 27B total/14B active) — needs a big card, ~80GB, best quality
+# Only offered when setup detects >=75GB VRAM (see GPU_VRAM_MB gating below), so it
+# never appears on smaller cards and never changes behavior for existing bundles.
+# NOTE: repo IDs / CLI flags below are best-effort from current knowledge of the
+# Wan-AI/Wan-Video release pattern (mirrors Wan2.1's own generate.py CLI) — not yet
+# verified against real 80GB+ hardware. Failure here is non-fatal: setup continues
+# and simply warns, exactly like every other optional install in this script.
+install_wan22() {
+  local variant="A14B" task="t2v-A14B" repo="Wan-AI/Wan2.2-T2V-A14B"
+  if [[ "${GPU_VRAM_MB:-0}" -lt 75000 ]]; then
+    variant="TI2V-5B"; task="ti2v-5B"; repo="Wan-AI/Wan2.2-TI2V-5B"
+  fi
+  info "Installing Wan2.2 (${variant}, best-effort — verify on first run)..."
+  nsenter -t "${POD_PID}" -m -- bash -c "
+git clone https://github.com/Wan-Video/Wan2.2 /opt/Wan2.2 2>/dev/null || \
+  (cd /opt/Wan2.2 && git pull)
+python3 -m venv /opt/wan22-env
+source /opt/wan22-env/bin/activate
+pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install --quiet wheel setuptools
+pip install --quiet -r /opt/Wan2.2/requirements.txt
+pip install --quiet huggingface_hub
+pip install flash-attn --no-build-isolation --quiet 2>/dev/null || \
+  echo '[WARN] flash-attn compile failed — Wan2.2 may need the same sdp fallback as Wan2.1'
+mkdir -p ${MODELS_DIR}/wan22
+hf download ${repo} --local-dir ${MODELS_DIR}/wan22
+" && success "Wan2.2 (${variant}) installed. Task: ${task}, ckpt: ${MODELS_DIR}/wan22" \
+  || warn "Wan2.2 install failed (repo/CLI may have changed — check /opt/Wan2.2 on the box)."
+
+  # CLI wrapper — mirrors wan21-generate, points at the Wan2.2 repo/task/checkpoint
+  nsenter -t "${POD_PID}" -m -- bash -c "
+mkdir -p /usr/local/bin
+cat > /usr/local/bin/wan22-generate << 'WEOF'
+#!/usr/bin/env bash
+PROMPT=\\\"\${1:-A cinematic scene, 4K quality}\\\"
+OUTPUT=\\\"\${2:-${DATA_DIR}/output-\\\$(date +%s).mp4}\\\"
+export TMPDIR=${TMPDIR_OVERRIDE}
+source /opt/wan22-env/bin/activate
+cd /opt/Wan2.2
+exec python generate.py --task ${task} --size 1280*720 \
+  --ckpt_dir ${MODELS_DIR}/wan22 \
+  --sample_steps 40 --sample_guide_scale 6.0 \
+  --prompt \\\"\\\$PROMPT\\\" --save_file \\\"\\\$OUTPUT\\\"
+WEOF
+chmod +x /usr/local/bin/wan22-generate
+"
 }
 
 # LTX-Video, CogVideoX-5B and HunyuanVideo are installed together by
@@ -853,7 +926,8 @@ else
       flux)     install_flux     ;;
       a1111)    install_a1111    ;;
       wan21)    install_wan21    ;;
-      hunyuan|ltx|cogvideo) : ;;  # bundled into AGH Video Studio after the loop
+      wan22)    install_wan22    ;;
+      hunyuan|ltx|cogvideo|mochi) : ;;  # bundled into AGH Video Studio after the loop
       esrgan)   install_esrgan   ;;
       musicgen) install_musicgen ;;
       bark)     install_bark     ;;
@@ -863,9 +937,9 @@ else
   done
 fi
 
-# Install LTX / CogVideoX / Hunyuan together as AGH Video Studio (unified diffusers UI)
+# Install LTX / CogVideoX / Hunyuan / Mochi-1 together as AGH Video Studio (unified diffusers UI)
 VIDEO_EXTRAS=""
-for m in ltx cogvideo hunyuan; do
+for m in ltx cogvideo hunyuan mochi; do
   echo " ${SELECTED_APPS} " | grep -q " ${m} " && VIDEO_EXTRAS="${VIDEO_EXTRAS} ${m}"
 done
 VIDEO_STUDIO_LABELS=""
@@ -874,6 +948,7 @@ for m in ${VIDEO_EXTRAS}; do
     ltx)      VIDEO_STUDIO_LABELS="${VIDEO_STUDIO_LABELS}LTX-Video," ;;
     cogvideo) VIDEO_STUDIO_LABELS="${VIDEO_STUDIO_LABELS}CogVideoX-5B," ;;
     hunyuan)  VIDEO_STUDIO_LABELS="${VIDEO_STUDIO_LABELS}HunyuanVideo," ;;
+    mochi)    VIDEO_STUDIO_LABELS="${VIDEO_STUDIO_LABELS}Mochi-1," ;;
   esac
 done
 VIDEO_STUDIO_LABELS="${VIDEO_STUDIO_LABELS%,}"
