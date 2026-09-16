@@ -16,7 +16,8 @@
 # Arg 1 (optional): lite | heavy   — size/length profile (default lite)
 # Remaining args  : test names, or "all" (B1/B2 tools) or "b3" (all incl. Bundle 3).
 #                   Default (none) = image upscale music voice
-# Test names      : image upscale music voice wan21 hunyuan ltx cogvideo a1111
+# Test names      : image upscale music voice wan21 hunyuan ltx cogvideo a1111 wan22 mochi
+#                   (wan22/mochi only appear when installed — 80GB+ GPU, see setup)
 #
 #   lite  : 512px image/12 steps, 5s music, short low-res video    — fast sanity
 #   heavy : 1280x720 image/30 steps, 120s music, long hi-res video — real-load test
@@ -73,7 +74,7 @@ SMOKE_PROMPT="A futuristic AI creative studio, holographic screens displaying gl
 # ── Which tests ───────────────────────────────────────────────────────────────
 CORE=(image upscale music voice)                                   # always-available
 ALL=(image upscale music voice wan21 hunyuan)                      # Bundle 1/2 tools
-B3=(image upscale music voice wan21 hunyuan ltx cogvideo a1111)    # + Bundle 3-only tools
+B3=(image upscale music voice wan21 hunyuan ltx cogvideo a1111 wan22 mochi)    # + Bundle 3-only tools
 if [[ $# -eq 0 ]]; then
   TESTS=("${CORE[@]}")
 elif [[ "${1:-}" == "all" ]]; then
@@ -259,6 +260,48 @@ PY
   [[ -s "${OUT}/cogvideo.mp4" ]] && { log "    -> ${OUT}/cogvideo.mp4"; return 0; } || return 1
 }
 
+t_wan22() {
+  [[ -d /opt/Wan2.2 ]] || { echo "Wan2.2 (/opt/Wan2.2) not installed — 80GB+ GPU only" > "${OUT}/wan22.err"; return 2; }
+  local vram; vram=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo 0)
+  local task="ti2v-5B"; [[ "${vram:-0}" -ge 75000 ]] && task="t2v-A14B"
+  log "    (Wan2.2 ${task})  steps:${WAN_STEPS} frames:${WAN_FRAMES} size:${WAN_SIZE}"
+  inpod "
+source /opt/wan22-env/bin/activate
+cd /opt/Wan2.2
+python generate.py --task ${task} --size ${WAN_SIZE} \
+  --ckpt_dir ${MODELS_DIR}/wan22 \
+  --frame_num ${WAN_FRAMES} \
+  --sample_steps ${WAN_STEPS} --sample_guide_scale 6.0 \
+  --prompt '${SMOKE_PROMPT}' \
+  --save_file ${OUT}/wan22.mp4 2>>${OUT}/wan22.err
+"
+  [[ -s "${OUT}/wan22.mp4" ]] && { log "    -> ${OUT}/wan22.mp4"; return 0; } || return 1
+}
+
+t_mochi() {
+  [[ -d /opt/agh-video-env ]] || { echo "AGH Video Studio (/opt/agh-video-env) not installed — Bundle 3 only" > "${OUT}/mochi.err"; return 2; }
+  local vram; vram=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo 0)
+  if [[ "${vram:-0}" -lt 42000 ]]; then
+    echo "GPU has ${vram}MB (<42GB) — Mochi-1 needs ~42GB+, skipping" > "${OUT}/mochi.err"; return 2
+  fi
+  log "    (Mochi-1, downloads model on first run)  frames:${HUN_FRAMES} steps:${HUN_STEPS}"
+  inpod "
+source /opt/agh-video-env/bin/activate
+export HF_HOME=${MODELS_DIR}/hf-cache
+python - <<'PY' 2>>${OUT}/mochi.err
+import torch
+from diffusers import MochiPipeline
+from diffusers.utils import export_to_video
+pipe=MochiPipeline.from_pretrained('genmo/mochi-1-preview', torch_dtype=torch.bfloat16)
+pipe.enable_model_cpu_offload(); pipe.vae.enable_tiling()
+v=pipe(prompt='${SMOKE_PROMPT}', height=480, width=848, num_frames=${HUN_FRAMES}, num_inference_steps=${HUN_STEPS}).frames[0]
+export_to_video(v, '${OUT}/mochi.mp4', fps=15)
+print('ok')
+PY
+"
+  [[ -s "${OUT}/mochi.mp4" ]] && { log "    -> ${OUT}/mochi.mp4"; return 0; } || return 1
+}
+
 t_a1111() {
   [[ -d /opt/stable-diffusion-webui ]] || { echo "A1111 (/opt/stable-diffusion-webui) not installed — Bundle 3 only" > "${OUT}/a1111.err"; return 2; }
   # Needs the API enabled (setup launches launch.py with --api).
@@ -296,6 +339,8 @@ for t in "${TESTS[@]}"; do
     ltx)      run_test ltx      t_ltx      ;;
     cogvideo) run_test cogvideo t_cogvideo ;;
     a1111)    run_test a1111    t_a1111    ;;
+    wan22)    run_test wan22    t_wan22    ;;
+    mochi)    run_test mochi    t_mochi    ;;
     *) log "${YELLOW}skip unknown test: ${t}${NC}" ;;
   esac
 done

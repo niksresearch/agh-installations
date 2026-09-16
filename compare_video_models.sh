@@ -56,7 +56,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$PROMPT" ]] && PROMPT="A futuristic AI creative studio, holographic screens displaying glowing artwork, blue and purple particles drifting through the air, slow cinematic camera push forward, photorealistic, smooth motion, 4K"
 
-ALL_ENGINES=(ltx hunyuan cogvideo wan21)
+ALL_ENGINES=(ltx hunyuan cogvideo wan21 wan22 mochi)
 [[ ${#ARGS[@]} -eq 0 ]] && ENGINES=("${ALL_ENGINES[@]}") || ENGINES=("${ARGS[@]}")
 
 if [[ "$MODE" == "heavy" ]]; then
@@ -180,6 +180,42 @@ python generate.py --task t2v-14B --size ${WAN_SIZE} \
   --prompt '${PROMPT}' \
   --save_file ${OUT}/wan21.mp4 2>>${OUT}/wan21.err
 " "frames:${WAN_FRAMES} size:${WAN_SIZE} steps:${WAN_STEPS}"
+      ;;
+
+    wan22)
+      if [[ ! -d /opt/Wan2.2 ]]; then log "${YELLOW}○ wan22: not installed — 80GB+ GPU only, skipping${NC}"; ENGINE_STATUS[wan22]="SKIP"; continue; fi
+      task="ti2v-5B"; [[ "${GPU_VRAM_MB:-0}" -ge 75000 ]] && task="t2v-A14B"
+      run_engine wan22 "
+source /opt/wan22-env/bin/activate
+cd /opt/Wan2.2
+python generate.py --task ${task} --size ${WAN_SIZE} \
+  --ckpt_dir ${MODELS_DIR}/wan22 \
+  --frame_num ${WAN_FRAMES} \
+  --sample_steps ${WAN_STEPS} --sample_guide_scale 6.0 \
+  --prompt '${PROMPT}' \
+  --save_file ${OUT}/wan22.mp4 2>>${OUT}/wan22.err
+" "task:${task} frames:${WAN_FRAMES} size:${WAN_SIZE} steps:${WAN_STEPS}"
+      ;;
+
+    mochi)
+      if [[ ! -d /opt/agh-video-env ]]; then log "${YELLOW}○ mochi: AGH Video Studio not installed — skipping${NC}"; ENGINE_STATUS[mochi]="SKIP"; continue; fi
+      if [[ "${GPU_VRAM_MB:-0}" -lt 42000 ]]; then
+        log "${YELLOW}○ mochi: GPU has ${GPU_VRAM_MB}MB (<42GB), Mochi-1 needs ~42GB+ — skipping${NC}"
+        ENGINE_STATUS[mochi]="SKIP"; continue
+      fi
+      run_engine mochi "
+source /opt/agh-video-env/bin/activate
+export HF_HOME=${MODELS_DIR}/hf-cache
+python - <<'PY' 2>>${OUT}/mochi.err
+import torch
+from diffusers import MochiPipeline
+from diffusers.utils import export_to_video
+pipe=MochiPipeline.from_pretrained('genmo/mochi-1-preview', torch_dtype=torch.bfloat16)
+pipe.enable_model_cpu_offload(); pipe.vae.enable_tiling()
+v=pipe(prompt='${PROMPT}', height=480, width=848, num_frames=${HUN_FRAMES}, num_inference_steps=${HUN_STEPS}).frames[0]
+export_to_video(v, '${OUT}/mochi.mp4', fps=15)
+print('ok')
+PY" "frames:${HUN_FRAMES} size:848x480 steps:${HUN_STEPS} fps:15"
       ;;
 
     *) log "${YELLOW}skip unknown engine: ${eng}${NC}" ;;
