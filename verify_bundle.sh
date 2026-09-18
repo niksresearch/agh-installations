@@ -26,7 +26,14 @@ fi
 MODELS_DIR="${AGH_MODELS}"
 
 # ── Pod (CE pods run tools in a mount namespace) ──────────────────────────────
-POD_PID=$(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}' | head -1)
+# Robust pod pick: the sleep-infinity whose mount namespace actually has the tools.
+# A stale/duplicate 'sleep infinity' from an earlier pod gives the wrong namespace
+# (nsenter then fails with 'cannot open /proc/<pid>/ns/mnt' on every call).
+POD_PID=""
+for _pid in $(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}'); do
+  if nsenter -t "$_pid" -m -- test -d /opt/comfyui-env 2>/dev/null; then POD_PID="$_pid"; break; fi
+done
+[[ -n "$POD_PID" ]] || POD_PID=$(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}' | head -1)
 inpod() { if [[ -n "$POD_PID" ]]; then nsenter -t "$POD_PID" -m -- bash -c "$1"; else bash -c "$1"; fi; }
 
 PASS=0; FAIL=0

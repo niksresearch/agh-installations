@@ -40,15 +40,22 @@ if [[ -z "${AGH_MODELS:-}" ]]; then
   AGH_MODELS="${AGH_MODELS:-/opt/models}"
 fi
 MODELS_DIR="${AGH_MODELS}"
-POD_PID=$(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}' | head -1)
+# Robust pod pick: the sleep-infinity whose mount namespace actually has the tools.
+# A stale/duplicate 'sleep infinity' from an earlier pod gives the wrong namespace
+# (nsenter then fails with 'cannot open /proc/<pid>/ns/mnt' on every call).
+POD_PID=""
+for _pid in $(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}'); do
+  if nsenter -t "$_pid" -m -- test -d /opt/comfyui-env 2>/dev/null; then POD_PID="$_pid"; break; fi
+done
+[[ -n "$POD_PID" ]] || POD_PID=$(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}' | head -1)
 [[ -n "$POD_PID" ]] || { echo "Pod not running — run setup_creative_suite.sh first."; exit 1; }
 inpod() { nsenter -t "$POD_PID" -m -- bash -c "$1"; }
 
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "GPU")
 GPU_RATE="${GPU_RATE:-0}"
 
-GROUPS=("$@"); [[ ${#GROUPS[@]} -eq 0 ]] && GROUPS=(image video audio upscale chat)
-has_group() { local g; for g in "${GROUPS[@]}"; do [[ "$g" == "$1" ]] && return 0; done; return 1; }
+BENCH_GROUPS=("$@"); [[ ${#BENCH_GROUPS[@]} -eq 0 ]] && BENCH_GROUPS=(image video audio upscale chat)
+has_group() { local g; for g in "${BENCH_GROUPS[@]}"; do [[ "$g" == "$1" ]] && return 0; done; return 1; }
 
 # CSV header (once)
 echo "modality,model,input,output,wall_s,peak_vram_mb,throughput,tokens,cost_usd" > "${CSV}"
@@ -77,7 +84,7 @@ log "${BOLD}══════════════════════�
 log "${BOLD}  AGH Creative Suite — model benchmark${NC}"
 log "  GPU:        ${GPU_NAME}"
 log "  Rate:       ${GPU_RATE} \$/GPU-hour $( [[ "$GPU_RATE" == "0" ]] && echo '(set GPU_RATE to fill cost)')"
-log "  Groups:     ${GROUPS[*]}"
+log "  Groups:     ${BENCH_GROUPS[*]}"
 log "  Output:     ${OUT}/"
 log "${BOLD}════════════════════════════════════════════════════════════════${NC}"
 
