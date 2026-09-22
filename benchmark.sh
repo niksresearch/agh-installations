@@ -88,24 +88,44 @@ log "  Groups:     ${BENCH_GROUPS[*]}"
 log "  Output:     ${OUT}/"
 log "${BOLD}════════════════════════════════════════════════════════════════${NC}"
 
-# ── IMAGE (ComfyUI: FLUX or SDXL/SD1.5) ───────────────────────────────────────
+# ── IMAGE (diffusers: SDXL/SD1.5, direct from checkpoint) ─────────────────────
+# Matches demo_creative_suite_v2.sh's image step: on Ubuntu 24.04/Python 3.12,
+# ComfyUI's comfy_kitchen backend fails to load (torch rejects its list[int] op
+# schemas), so ComfyUI is not a reliable benchmark target on this OS. diffusers
+# loads the same checkpoint directly — no ComfyUI dependency, works everywhere.
 if has_group image; then
   log "${CYAN}▶ image${NC}"
-  if curl -s --connect-timeout 3 http://127.0.0.1:8188/system_stats >/dev/null 2>&1; then
-    CKPT=$(ls "${MODELS_DIR}"/comfyui/checkpoints/*.safetensors 2>/dev/null | head -1 | xargs -n1 basename)
-    if [[ -n "$CKPT" ]]; then
-      SEED=$(( (RANDOM<<15) ^ RANDOM ))
-      vp=$(start_vram); t0=$(date +%s)
-      PID=$(curl -s -X POST http://127.0.0.1:8188/prompt -H "Content-Type: application/json" \
-        -d "{\"prompt\":{\"1\":{\"class_type\":\"CheckpointLoaderSimple\",\"inputs\":{\"ckpt_name\":\"${CKPT}\"}},\"2\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"${PROMPT}\",\"clip\":[\"1\",1]}},\"3\":{\"class_type\":\"CLIPTextEncode\",\"inputs\":{\"text\":\"blurry\",\"clip\":[\"1\",1]}},\"4\":{\"class_type\":\"EmptyLatentImage\",\"inputs\":{\"width\":1024,\"height\":1024,\"batch_size\":1}},\"5\":{\"class_type\":\"KSampler\",\"inputs\":{\"model\":[\"1\",0],\"positive\":[\"2\",0],\"negative\":[\"3\",0],\"latent_image\":[\"4\",0],\"seed\":${SEED},\"steps\":25,\"cfg\":7,\"sampler_name\":\"euler\",\"scheduler\":\"normal\",\"denoise\":1}},\"6\":{\"class_type\":\"VAEDecode\",\"inputs\":{\"samples\":[\"5\",0],\"vae\":[\"1\",2]}},\"7\":{\"class_type\":\"SaveImage\",\"inputs\":{\"images\":[\"6\",0],\"filename_prefix\":\"bench\"}}}}" \
-        | python3 -c "import sys,json;print(json.load(sys.stdin).get('prompt_id',''))" 2>/dev/null)
-      for _ in $(seq 1 60); do sleep 2; [[ "$(curl -s http://127.0.0.1:8188/history/$PID | python3 -c 'import sys,json;print("y" if json.load(sys.stdin) else "")' 2>/dev/null)" == "y" ]] && break; done
-      f=$(curl -s http://127.0.0.1:8188/history/$PID | python3 -c "import sys,json;d=json.load(sys.stdin);print(list(d.values())[0]['outputs']['7']['images'][0]['filename'])" 2>/dev/null)
-      curl -s "http://127.0.0.1:8188/view?filename=$f&type=output" -o "${OUT}/image.png" 2>/dev/null
-      t1=$(date +%s); wall=$((t1-t0)); peak=$(stop_vram "$vp")
-      record image "ComfyUI/${CKPT%.safetensors}" "1024x1024, 25 steps" "1024x1024 PNG $(fsize "${OUT}/image.png")" "$wall" "$peak" "$(awk "BEGIN{printf \"%.2f s/img\", $wall}")" ""
-    else log "  ${YELLOW}○ no checkpoint${NC}"; fi
-  else log "  ${YELLOW}○ ComfyUI not running (:8188)${NC}"; fi
+  CKPT=$(ls "${MODELS_DIR}"/comfyui/checkpoints/sd_xl_base_1.0.safetensors 2>/dev/null | head -1)
+  [[ -z "$CKPT" ]] && CKPT=$(ls "${MODELS_DIR}"/comfyui/checkpoints/*.safetensors 2>/dev/null | head -1)
+  if [[ -n "$CKPT" && -d /opt/agh-video-env ]]; then
+    CKPT_NAME=$(basename "$CKPT")
+    vp=$(start_vram); t0=$(date +%s)
+    inpod "
+source /opt/agh-video-env/bin/activate
+export HF_HOME=${MODELS_DIR}/hf-cache
+CKPT='${CKPT}' OUT_IMG='${OUT}/image.png' python - <<'PY' 2>>${OUT}/image.err
+import os, torch
+ckpt=os.environ['CKPT']; out=os.environ['OUT_IMG']
+is_xl='xl' in os.path.basename(ckpt).lower()
+if is_xl:
+    from diffusers import StableDiffusionXLPipeline
+    pipe=StableDiffusionXLPipeline.from_single_file(ckpt, torch_dtype=torch.float16).to('cuda')
+    kw=dict(num_inference_steps=25, guidance_scale=7.0, width=1024, height=1024)
+else:
+    from diffusers import StableDiffusionPipeline
+    pipe=StableDiffusionPipeline.from_single_file(ckpt, torch_dtype=torch.float16).to('cuda')
+    kw=dict(num_inference_steps=25, guidance_scale=7.5, width=768, height=512)
+img=pipe(prompt='${PROMPT}', negative_prompt='blurry, ugly, watermark, low quality', **kw).images[0]
+img.save(out)
+print('ok', img.size)
+PY" >/dev/null 2>&1
+    t1=$(date +%s); wall=$((t1-t0)); peak=$(stop_vram "$vp")
+    if [[ -s "${OUT}/image.png" ]]; then
+      record image "diffusers/${CKPT_NAME%.safetensors}" "1024x1024, 25 steps" "1024x1024 PNG $(fsize "${OUT}/image.png")" "$wall" "$peak" "$(awk "BEGIN{printf \"%.2f s/img\", $wall}")" ""
+    else
+      log "  ${RED}✗ image generation failed (see ${OUT}/image.err)${NC}"
+    fi
+  else log "  ${YELLOW}○ no checkpoint or diffusers venv (/opt/agh-video-env) missing${NC}"; fi
 fi
 
 # ── VIDEO (Wan2.1 + diffusers LTX/CogVideoX/Hunyuan) ──────────────────────────
