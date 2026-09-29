@@ -97,7 +97,7 @@ DATA_DIR="${AGH_DATA}"
 MODELS_DIR="${AGH_MODELS}"
 export TMPDIR="${TMPDIR:-${DATA_DIR}/tmp}"
 
-OUTPUT_DIR="${DATA_DIR}/agh-promo-v2"
+OUTPUT_DIR="${DATA_DIR}/agh-cartoon"
 BRAND_DIR="${OUTPUT_DIR}/brand"
 LOG_FILE="${OUTPUT_DIR}/demo.log"
 DEBUG_LOG="${OUTPUT_DIR}/demo-debug.log"
@@ -258,12 +258,12 @@ SDXL_CKPT="${MODELS_DIR}/comfyui/checkpoints/sd_xl_base_1.0.safetensors"
 [[ -f "$SDXL_CKPT" ]] || SDXL_CKPT="${MODELS_DIR}/comfyui/checkpoints/v1-5-pruned-emaonly.safetensors"
 
 PROMPTS=(
-  "agh_workstation|A sleek futuristic AI creative workstation glowing with blue and purple light, multiple holographic screens showing AI-generated artwork, dark minimal setup, cinematic lighting, ultra detailed"
-  "agh_creator|A confident African creative professional in front of multiple screens showing stunning AI-generated videos and images, golden hour light, inspired expression, cinematic aspirational"
-  "agh_abstract_ai|Abstract visualization of artificial intelligence creativity, flowing neural networks forming beautiful art, electric blue and purple particles, deep space background, 8K"
-  "agh_gpu_power|An H100 GPU chip glowing with neon blue light, futuristic close-up macro shot, cinematic dramatic lighting, chrome and silicon textures"
-  "agh_continent|A glowing map of Africa rendered as a circuit board with light flowing across it, data centers lighting up, electric blue and cyan, futuristic, cinematic 8K"
-  "agh_no_limits|A creative studio at night, screens glowing with AI-generated art, inspiring atmosphere, cinematic wide shot, photorealistic"
+  "scene1_meadow|A cheerful cartoon meadow at sunrise, rolling green hills, giant friendly sunflowers with smiling faces, soft pastel colours, storybook illustration style, 2D animation, warm and gentle"
+  "scene2_fox|An adorable cartoon fox cub with an oversized red scarf standing on a hill, big curious eyes, storybook illustration, soft pastel palette, children's book art style"
+  "scene3_forest|A magical cartoon forest path with glowing fireflies and friendly mushroom houses, whimsical storybook illustration, warm evening light, children's animation style"
+  "scene4_friends|A cartoon fox cub and a small blue owl sitting together on a log sharing berries, wholesome children's book illustration, soft colours, gentle and friendly"
+  "scene5_river|A cartoon wooden bridge over a sparkling river with cheerful jumping fish, bright storybook illustration, children's animation style, sunny and playful"
+  "scene6_home|A cosy cartoon treehouse glowing warmly at night under a starry sky, children's storybook illustration, soft blues and golds, peaceful bedtime mood"
 )
 
 if [[ -d /opt/agh-video-env && -f "$SDXL_CKPT" ]]; then
@@ -428,15 +428,15 @@ try:
 except Exception:
     pass
 out = pipe(
-    prompt='Cinematic shot gliding through a neon-lit AI art gallery, glowing abstract sculptures of light, deep blue and magenta, volumetric haze, smooth camera motion, photorealistic',
+    prompt='A gentle cartoon animation of a little fox cub walking along a sunny forest path, storybook 2D animation style, soft pastel colours, friendly and wholesome, smooth motion',
     height=320, width=512, num_frames=61, num_inference_steps=30,
 ).frames[0]
-export_to_video(out, '${OUTPUT_DIR}/videos/hunyuan_gallery.mp4', fps=15)
+export_to_video(out, '${OUTPUT_DIR}/videos/hunyuan_cartoon.mp4', fps=15)
 print('HUNYUAN_DONE')
 PYEOF
 " && {
     nsenter -t "${POD_PID}" -m -- bash -c "
-ffmpeg -y -loglevel error -i ${OUTPUT_DIR}/videos/hunyuan_gallery.mp4 \
+ffmpeg -y -loglevel error -i ${OUTPUT_DIR}/videos/hunyuan_cartoon.mp4 \
   -vf 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1' \
   -c:v libx264 -preset fast -crf 20 ${OUTPUT_DIR}/s4b_hunyuan.mp4"
     success "HunyuanVideo clip done."
@@ -461,12 +461,12 @@ import numpy as np
 from bark import SAMPLE_RATE, generate_audio, preload_models
 preload_models()
 lines = [
-    'Introducing the A G H Creative Suite.',
-    'Powered entirely by your own G P U.',
-    'Generate stunning images with state of the art models.',
-    'Create cinematic video. No time limits. No watermarks.',
-    'All running on Africa\\'s own G P U hub.',
-    'Your G P U. Your canvas. No limits.',
+    'Once upon a time, in a meadow where the sunflowers smiled,',
+    'there lived a little fox cub with a big red scarf.',
+    'One morning, the fox set off to find a friend.',
+    'Along the glowing forest path, he met a small blue owl.',
+    'They shared berries, crossed the sparkling river, and laughed together.',
+    'And that night, back in the cosy treehouse, the fox was not alone.',
 ]
 gap = np.zeros(int(0.4 * SAMPLE_RATE), dtype=np.float32)
 parts = []
@@ -501,9 +501,8 @@ import torchaudio
 m = MusicGen.get_pretrained('melody')
 m.set_generation_params(duration=75)
 audio = m.generate([
-    'Epic cinematic orchestral and electronic music for a premium tech product reveal. '
-    'Starts minimal and mysterious, builds with intensity, climaxes around 30 seconds '
-    'with full orchestra and modern synths, inspiring and futuristic.'
+    'Gentle whimsical children\\'s storybook music, soft acoustic guitar, light glockenspiel and '
+    'warm strings, playful and innocent, calm bedtime-story mood, no drums, soothing.'
 ])[0].cpu()
 torchaudio.save('${OUTPUT_DIR}/music.wav', audio, 32000)
 print('Music saved')
@@ -519,9 +518,9 @@ step "Step 7/7: Branding + Final Assembly"
 
 # Section label cards (only if that segment exists)
 [[ -f "${OUTPUT_DIR}/s2_images.mp4" ]] && \
-  make_card "${OUTPUT_DIR}/card_images.mp4" 2.5 "AI Image Generation" "FLUX · 4K Upscaled · No Credits" "0x001a0a" "white" "00ff88"
+  make_card "${OUTPUT_DIR}/card_images.mp4" 2.5 "A Little Fox Story" "Illustrated by AI · Made on one GPU" "0x001a0a" "white" "00ff88"
 [[ -f "${OUTPUT_DIR}/s4_wan.mp4" || -f "${OUTPUT_DIR}/s4b_hunyuan.mp4" ]] && \
-  make_card "${OUTPUT_DIR}/card_video.mp4" 2.5 "AI Video Generation" "Wan2.1 + HunyuanVideo — No Limits" "0x1a0500" "white" "ff6600"
+  make_card "${OUTPUT_DIR}/card_video.mp4" 2.5 "The Journey" "Animated with AI video" "0x1a0500" "white" "ff6600"
 
 # Branded end card (with real logo if available)
 if [[ "$HAS_BRAND" == "true" ]]; then
@@ -575,7 +574,7 @@ ffmpeg -y -loglevel error -i '${src}' \
 " && { echo "file '${ts}'" >> "${TS_LIST}"; ts_idx=$((ts_idx+1)); } || warn "Normalize failed: ${seg}"
 done
 
-FINAL="${OUTPUT_DIR}/AGH_Creative_Suite_Promo_DirectorsCut.mp4"
+FINAL="${OUTPUT_DIR}/AGH_Cartoon_Kids_Story.mp4"
 
 if [[ "$ts_idx" -gt 0 ]]; then
   info "Stitching ${ts_idx} segments + logo watermark + voiceover + music into final video..."
@@ -659,7 +658,7 @@ REPORT="${OUTPUT_DIR}/REPORT.md"
 RUN_SECS=$(( $(date +%s) - ${RUN_START:-$(date +%s)} ))
 GPU_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | head -1)
 {
-  echo "# AGH Creative Suite — Generation Report\n\n**Scenario:** Campaign Promo (Director's Cut)"
+  echo "# AGH Creative Suite — Generation Report\n\n**Scenario:** Cartoon Kids Story"
   echo ""
   echo "- **Created:**    $(date '+%Y-%m-%d %H:%M:%S %Z')"
   echo "- **Total time:** $(( RUN_SECS / 60 ))m $(( RUN_SECS % 60 ))s"

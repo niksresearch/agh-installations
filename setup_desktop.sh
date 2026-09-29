@@ -41,9 +41,19 @@ banner() {
 banner
 info "Host: $(hostname)  |  Time: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
+# ── LEAN mode ─────────────────────────────────────────────────────────────────
+# LEAN=1 installs ONLY what headless model evaluation needs: the pod + FFmpeg.
+# Skips XFCE/VNC/noVNC, Blender, WhisperX and the cloudflared public URL.
+# Default (LEAN unset/0) is the full desktop install — unchanged behaviour.
+LEAN="${LEAN:-0}"
+[[ "$LEAN" == "1" ]] && info "LEAN mode — pod + FFmpeg only (no desktop, no VNC, no tunnels)."
+
 # ── Password prompt ───────────────────────────────────────────────────────────
-# VNC_PASS can be pre-set by a parent script (e.g. setup_creative_suite.sh)
-if [[ -z "${VNC_PASS:-}" ]]; then
+# VNC_PASS can be pre-set by a parent script (e.g. setup_creative_suite.sh).
+# In LEAN mode there is no VNC server, so no password is needed at all.
+if [[ "$LEAN" == "1" ]]; then
+  VNC_PASS="${VNC_PASS:-unused-in-lean-mode}"
+elif [[ -z "${VNC_PASS:-}" ]]; then
   echo ""
   echo -e "${BOLD}Set a password for the virtual desktop:${NC}"
   echo -e "${CYAN}(Minimum 6 characters — you'll enter this when opening the desktop URL)${NC}"
@@ -99,6 +109,10 @@ POD_PID=$(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}' | hea
 success "Pod running. PID: ${POD_PID}"
 
 # ── Step 3: Install desktop stack ────────────────────────────────────────────
+if [[ "$LEAN" == "1" ]]; then
+  step 3 "Installing desktop environment — SKIPPED (LEAN mode)"
+  info "No XFCE/VNC/noVNC in LEAN mode."
+else
 step 3 "Installing desktop environment (XFCE + VNC + noVNC)"
 
 nsenter -t "${POD_PID}" -m -u -i -n -p -- bash -c "
@@ -112,16 +126,21 @@ apt-get install -y --no-install-recommends \
   2>/dev/null
 "
 success "Desktop stack installed."
+fi
 
 # ── Step 4: Install apps ──────────────────────────────────────────────────────
-step 4 "Installing apps (FFmpeg + Blender + WhisperX)"
+# FFmpeg is always installed (needed for encoding + ffprobe in benchmarks).
+# Blender and WhisperX are desktop/extra tools — skipped in LEAN mode.
+step 4 "Installing apps (FFmpeg$( [[ "$LEAN" == "1" ]] || echo " + Blender + WhisperX" ))"
 
 info "Installing FFmpeg..."
 nsenter -t "${POD_PID}" -m -u -i -n -p -- bash -c "
 export DEBIAN_FRONTEND=noninteractive
+apt-get update -q 2>/dev/null
 apt-get install -y ffmpeg 2>/dev/null
 " && success "FFmpeg installed." || warn "FFmpeg install failed."
 
+if [[ "$LEAN" != "1" ]]; then
 info "Installing Blender..."
 nsenter -t "${POD_PID}" -m -u -i -n -p -- bash -c "
 export DEBIAN_FRONTEND=noninteractive
@@ -136,8 +155,20 @@ source /opt/whisperx-env/bin/activate
 pip install --quiet torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 pip install --quiet whisperx
 " && success "WhisperX installed at /opt/whisperx-env." || warn "WhisperX install failed."
+else
+info "Skipping Blender + WhisperX (LEAN mode)."
+# LEAN still needs pip/venv/git for the model venvs installed by the parent script
+nsenter -t "${POD_PID}" -m -u -i -n -p -- bash -c "
+export DEBIAN_FRONTEND=noninteractive
+apt-get install -y python3-pip python3-venv git 2>/dev/null
+" && success "python3-pip/venv/git installed." || warn "python tooling install failed."
+fi
 
 # ── Step 5: Start display server ─────────────────────────────────────────────
+if [[ "$LEAN" == "1" ]]; then
+  step 5 "Starting display + VNC server — SKIPPED (LEAN mode)"
+  info "Headless: no Xvfb/XFCE/x11vnc/websockify started."
+else
 step 5 "Starting display + VNC server"
 
 pkill Xvfb    2>/dev/null || true
@@ -179,8 +210,13 @@ if ss -tlnp | grep -q ":${NOVNC_PORT}"; then
 else
   warn "Port ${NOVNC_PORT} not detected. Check: ss -tlnp | grep ${NOVNC_PORT}"
 fi
+fi
 
 # ── Step 6: Install cloudflared for public URL ────────────────────────────────
+if [[ "$LEAN" == "1" ]]; then
+  step 6 "Public URL (cloudflared) — SKIPPED (LEAN mode)"
+  info "Reach the box over SSH; no tunnel needed for headless benchmarking."
+else
 step 6 "Setting up public URL (cloudflared)"
 
 if ! command -v cloudflared &>/dev/null; then
@@ -218,7 +254,26 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
+fi   # end of LEAN guard for steps 6-7 (cloudflared + tunnel)
+
 # ── Done ─────────────────────────────────────────────────────────────────────
+if [[ "$LEAN" == "1" ]]; then
+  echo ""
+  echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${BOLD}${GREEN}║        Pod Ready (LEAN — headless, no desktop)           ║${NC}"
+  echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
+  echo ""
+  echo -e "${BOLD}Installed:${NC}"
+  echo -e "  ${GREEN}•${NC} Pod (PID ${POD_PID})"
+  echo -e "  ${GREEN}•${NC} FFmpeg"
+  echo -e "  ${GREEN}•${NC} python3-pip / venv / git"
+  echo ""
+  echo -e "  ${CYAN}Skipped:${NC} XFCE, VNC/noVNC, cloudflared tunnel, Blender, WhisperX"
+  echo -e "  ${CYAN}Access:${NC}  SSH only — model venvs are installed by the parent script."
+  echo ""
+  return 0 2>/dev/null || exit 0
+fi
+
 SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || echo "unknown")
 
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"

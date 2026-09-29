@@ -113,10 +113,20 @@ mkdir -p "${MODELS_DIR}" "${APPS_DIR}" "${LOGS_DIR}" "${TMPDIR_OVERRIDE}"
 export TMPDIR="${TMPDIR_OVERRIDE}"
 
 # ── Non-interactive mode ──────────────────────────────────────────────────────
-# Unattended (Shadeform startup script / cloud-init) when BUNDLE env var is set.
-# Required env for unattended: BUNDLE (1-3) and VNC_PASS. HF_TOKEN optional.
+# Unattended (Shadeform startup script / cloud-init) when BUNDLE or APPS is set.
+# Required env for unattended: BUNDLE (1-4) or APPS, plus VNC_PASS unless LEAN=1.
+# HF_TOKEN optional.
 NONINTERACTIVE=0
-[[ -n "${BUNDLE:-}" ]] && NONINTERACTIVE=1
+[[ -n "${BUNDLE:-}" || -n "${APPS:-}" ]] && NONINTERACTIVE=1
+
+# ── LEAN mode ─────────────────────────────────────────────────────────────────
+# LEAN=1 → headless model-evaluation box: skips the desktop/VNC/tunnel stack, the
+# GUI creative apps (GIMP/Krita/Kdenlive/Audacity/Inkscape/Chrome), and the Phase-5
+# service launches + portal. Keeps the pod, FFmpeg, ComfyUI checkpoints and every
+# selected model. Default (unset/0) = full install, behaviour unchanged.
+LEAN="${LEAN:-0}"
+export LEAN
+[[ "$LEAN" == "1" ]] && info "LEAN mode — headless eval box (no desktop, no VNC, no portal)."
 
 # ── HuggingFace account setup ─────────────────────────────────────────────────
 HF_TOKEN_FILE="/root/.hf_token"
@@ -174,8 +184,13 @@ fi
 export HF_TOKEN="${HF_TOKEN:-}"
 
 # ── Password prompt ───────────────────────────────────────────────────────────
+# LEAN mode has no VNC server, so the whole password path is skipped.
+if [[ "$LEAN" == "1" ]]; then
+  VNC_PASS="${VNC_PASS:-unused-in-lean-mode}"
+  info "LEAN mode — skipping desktop password (no VNC server)."
+else
 if [[ -z "${VNC_PASS:-}" ]] && [[ "${NONINTERACTIVE}" == "1" ]]; then
-  error "Unattended mode (BUNDLE set) requires VNC_PASS env var (min 6 chars)."
+  error "Unattended mode (BUNDLE/APPS set) requires VNC_PASS env var (min 6 chars), or set LEAN=1."
   exit 1
 fi
 if [[ -n "${VNC_PASS:-}" ]]; then
@@ -204,6 +219,7 @@ else
   done
   success "Password accepted."
 fi
+fi   # end of LEAN guard around the password path
 export VNC_PASS
 
 # ── App selection — Tier 2 custom checklist ───────────────────────────────────
@@ -265,19 +281,35 @@ pick_bundle() {
     1) SELECTED_APPS="flux wan21 esrgan" ;;
     2) SELECTED_APPS="flux wan21 hunyuan musicgen bark esrgan" ;;
     3) SELECTED_APPS="flux a1111 hunyuan wan21 ltx cogvideo esrgan musicgen bark devtools" ;;
+    # Bundle 4 "Eval" — model benchmarking only: every image + video engine, plus
+    # ESRGAN (upscale) and Bark (voice). MusicGen is always installed regardless.
+    # Skips A1111 and devtools — not needed to measure model performance.
+    # Pair with LEAN=1 to also skip the desktop/VNC/tunnel stack.
+    4) SELECTED_APPS="flux hunyuan wan21 ltx cogvideo esrgan bark" ;;
     *) return 1 ;;
   esac
-  # Bundle 3 on a big card (H100/H200/A100-80GB, >=75GB VRAM): add the higher-end
-  # video models. Wan2.1 stays too (auto-skipped at demo/generation time only if
-  # VRAM is short — on 80GB+ it fits fine, so having both gives a quality choice).
-  if [[ "$1" == "3" && "${GPU_VRAM_MB:-0}" -ge 75000 ]]; then
+  # Bundles 3 and 4 on a big card (H100/H200/A100-80GB, >=75GB VRAM): add the
+  # higher-end video models. Wan2.1 stays too (auto-skipped at demo/generation time
+  # only if VRAM is short — on 80GB+ it fits fine, so you get a quality choice).
+  if [[ ( "$1" == "3" || "$1" == "4" ) && "${GPU_VRAM_MB:-0}" -ge 75000 ]]; then
     SELECTED_APPS="${SELECTED_APPS} wan22 mochi"
-    info "Detected ${GPU_VRAM_MB}MiB VRAM (>=75GB) — adding Wan2.2 + Mochi-1 to Bundle 3."
+    info "Detected ${GPU_VRAM_MB}MiB VRAM (>=75GB) — adding Wan2.2 + Mochi-1 to Bundle ${1}."
   fi
 }
 
-if [[ -n "${BUNDLE:-}" ]]; then
-  pick_bundle "${BUNDLE}" || { error "Invalid BUNDLE='${BUNDLE}' (use 1, 2, or 3)."; exit 1; }
+# APPS env var — unattended custom selection, e.g.
+#   sudo APPS="flux hunyuan wan21 ltx cogvideo" LEAN=1 bash setup_creative_suite.sh
+# Takes precedence over BUNDLE. Same >=75GB auto-append applies if you ask for video.
+if [[ -n "${APPS:-}" ]]; then
+  SELECTED_APPS="${APPS}"
+  if [[ "${GPU_VRAM_MB:-0}" -ge 75000 ]]; then
+    echo " ${SELECTED_APPS} " | grep -q " wan22 " || SELECTED_APPS="${SELECTED_APPS} wan22"
+    echo " ${SELECTED_APPS} " | grep -q " mochi " || SELECTED_APPS="${SELECTED_APPS} mochi"
+    info "Detected ${GPU_VRAM_MB}MiB VRAM (>=75GB) — ensured Wan2.2 + Mochi-1 are included."
+  fi
+  success "Apps selected from APPS env: ${SELECTED_APPS}"
+elif [[ -n "${BUNDLE:-}" ]]; then
+  pick_bundle "${BUNDLE}" || { error "Invalid BUNDLE='${BUNDLE}' (use 1, 2, 3, or 4)."; exit 1; }
   success "Bundle ${BUNDLE} selected from environment."
 else
   echo ""
@@ -295,14 +327,18 @@ else
   echo -e "         All apps + all AI models"
   echo -e "         + Wan2.2 and Mochi-1 automatically added on 80GB+ GPUs (H100/H200/A100-80GB)"
   echo ""
-  echo -e "  ${CYAN}[4]${NC} ${BOLD}Custom${NC}       Pick your own apps"
+  echo -e "  ${CYAN}[4]${NC} ${BOLD}Eval${NC}         Model benchmarking only             (~150GB, ~70min)"
+  echo -e "         All image + video engines + ESRGAN + Bark + MusicGen"
+  echo -e "         No A1111, no dev tools. Pair with ${BOLD}LEAN=1${NC} to skip the desktop entirely."
+  echo ""
+  echo -e "  ${CYAN}[5]${NC} ${BOLD}Custom${NC}       Pick your own apps"
   echo ""
   while true; do
-    read -rp "$(echo -e "${BOLD}Enter choice [1-4]:${NC} ")" bundle_choice
+    read -rp "$(echo -e "${BOLD}Enter choice [1-5]:${NC} ")" bundle_choice
     case "$bundle_choice" in
-      1|2|3) pick_bundle "$bundle_choice"; break ;;
-      4) show_custom_menu; break ;;
-      *) warn "Enter 1, 2, 3, or 4." ;;
+      1|2|3|4) pick_bundle "$bundle_choice"; break ;;
+      5) show_custom_menu; break ;;
+      *) warn "Enter 1, 2, 3, 4, or 5." ;;
     esac
   done
 fi
@@ -756,7 +792,11 @@ pip install --quiet jupyterlab
 }
 
 # ── Phase 2: Desktop setup ────────────────────────────────────────────────────
-step "Phase 2/5: Setting up virtual desktop (XFCE + VNC + cloudflared)"
+if [[ "$LEAN" == "1" ]]; then
+  step "Phase 2/5: Creating pod (LEAN — no desktop/VNC/tunnel)"
+else
+  step "Phase 2/5: Setting up virtual desktop (XFCE + VNC + cloudflared)"
+fi
 
 DESKTOP_SCRIPT_URL="https://raw.githubusercontent.com/niksresearch/agh-installations/main/setup_desktop.sh"
 info "Downloading setup_desktop.sh..."
@@ -764,8 +804,10 @@ wget -qO /tmp/setup_desktop.sh "${DESKTOP_SCRIPT_URL}"
 chmod +x /tmp/setup_desktop.sh
 
 info "Running desktop setup..."
+# LEAN is exported, so setup_desktop.sh creates the pod + FFmpeg only and skips
+# XFCE/VNC/noVNC/cloudflared/Blender/WhisperX.
 bash /tmp/setup_desktop.sh
-success "Desktop setup complete."
+success "$( [[ "$LEAN" == "1" ]] && echo 'Pod ready (LEAN).' || echo 'Desktop setup complete.' )"
 
 POD_PID=$(ps aux | grep "sleep infinity" | grep -v grep | awk '{print $2}' | head -1)
 [[ -n "$POD_PID" ]] || { error "Pod PID not found. Desktop setup may have failed."; exit 1; }
@@ -787,7 +829,16 @@ success "Pod environment configured (TMPDIR=${TMPDIR_OVERRIDE})."
 # ── Phase 3: Always-on tools ──────────────────────────────────────────────────
 step "Phase 3/5: Installing always-on creative tools"
 
-info "Installing GIMP, Krita, Kdenlive, Audacity, Inkscape, Chrome, mpv, eog..."
+# LEAN mode installs only the toolchain the model venvs need (python/pip/venv/git,
+# curl/wget for downloads, and build-essential+cargo/rustc so source builds like
+# tokenizers work on Python 3.12). The GUI creative apps are skipped entirely.
+if [[ "$LEAN" == "1" ]]; then
+  info "LEAN mode — skipping GUI apps (GIMP/Krita/Kdenlive/Audacity/Inkscape/Chrome/mpv/eog)."
+  GUI_PKGS=""
+else
+  info "Installing GIMP, Krita, Kdenlive, Audacity, Inkscape, Chrome, mpv, eog..."
+  GUI_PKGS="gimp krita kdenlive audacity inkscape mpv eog"
+fi
 nsenter -t "${POD_PID}" -m -- bash -c "
 export DEBIAN_FRONTEND=noninteractive
 # apt-get update first: on a fresh pod the package lists are often empty, so an
@@ -795,8 +846,7 @@ export DEBIAN_FRONTEND=noninteractive
 # broke chrome + checkpoint downloads. Update, then ensure wget/curl are really here.
 apt-get update -y 2>/dev/null || true
 apt-get install -y --no-install-recommends \
-  gimp krita kdenlive audacity inkscape \
-  mpv eog \
+  ${GUI_PKGS} \
   python3-pip python3-venv git curl wget \
   build-essential pkg-config cargo rustc \
   2>/dev/null
@@ -805,7 +855,8 @@ command -v wget >/dev/null || echo '[WARN] wget still missing after apt install'
 # (e.g. tokenizers) have no cp312 wheel and build from source, which requires Rust.
 command -v cargo >/dev/null || echo '[WARN] cargo missing — source builds (tokenizers) may fail'
 
-# Chrome
+# Chrome + desktop shortcuts — pointless without a desktop, so skipped in LEAN.
+if [ '${LEAN}' != '1' ]; then
 wget -qO /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 dpkg -i /tmp/chrome.deb 2>/dev/null || apt-get install -f -y -q
 sed -i 's|Exec=/usr/bin/google-chrome-stable|Exec=/usr/bin/google-chrome-stable --no-sandbox|g' \
@@ -853,7 +904,8 @@ Terminal=false
 Categories=FileManager;
 DEOF
 chmod +x /root/Desktop/Browse-Outputs.desktop
-" && success "Core creative tools + media viewers + desktop shortcuts installed." || warn "Some core tools failed."
+fi
+" && success "Core tools installed$( [[ "$LEAN" == "1" ]] && echo ' (LEAN — no GUI apps)' || echo ' + media viewers + desktop shortcuts')." || warn "Some core tools failed."
 
 info "Installing ComfyUI (AI workflow hub on port 8188)..."
 nsenter -t "${POD_PID}" -m -- bash -c "
@@ -1005,6 +1057,14 @@ chmod +x /usr/local/bin/musicgen-generate
 " && success "CLI wrapper scripts installed." || warn "Wrapper script install failed."
 
 # ── Phase 5: Start AI services ───────────────────────────────────────────────
+# LEAN mode is headless: nothing is served. Benchmarks/demos call the model venvs
+# directly via nsenter, so idle Gradio/ComfyUI services would only hold VRAM and
+# skew measurements. Skipped entirely.
+if [[ "$LEAN" == "1" ]]; then
+step "Phase 5/5: Starting services — SKIPPED (LEAN mode)"
+info "No ComfyUI/Wan2.1/Video Studio/A1111/Jupyter services, no portal, no tunnels."
+info "Run models directly, e.g.: sudo bash benchmark.sh  |  sudo bash compare_video_models.sh"
+else
 step "Phase 5/5: Starting services"
 
 # ComfyUI on port 8188
@@ -1204,6 +1264,7 @@ if [[ -n "$PORTAL_PUBLIC" ]]; then
 sed -i 's|</body>|<hr><h3 style=\"color:#58a6ff\">Public URLs (shareable)</h3><ul style=\"font-family:monospace;line-height:2\">${PORTAL_PUBLIC}</ul></body>|' /opt/agh-portal/index.html
 "
 fi
+fi   # end of LEAN guard around Phase 5 (services + portal + tunnels)
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || echo "unknown")

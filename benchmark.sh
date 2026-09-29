@@ -99,31 +99,50 @@ if has_group image; then
   [[ -z "$CKPT" ]] && CKPT=$(ls "${MODELS_DIR}"/comfyui/checkpoints/*.safetensors 2>/dev/null | head -1)
   if [[ -n "$CKPT" && -d /opt/agh-video-env ]]; then
     CKPT_NAME=$(basename "$CKPT")
+    log "  ${YELLOW}(loading model + generating — tail -f ${OUT}/image.err to watch live, hard cap 10min)${NC}"
     vp=$(start_vram); t0=$(date +%s)
-    inpod "
+    : > "${OUT}/image.err"
+    # HF_HUB_OFFLINE avoids a silent, timeout-less hang if from_single_file tries to
+    # reach huggingface.co for a missing config component and the pod's outbound
+    # network stalls — that hang (GPU idle at 0%, no error, no output) is exactly
+    # what happened before. Falls back to online load if offline load fails.
+    # `timeout` wraps nsenter directly (a real binary, not the inpod shell function,
+    # which a plain `bash -c` subshell would not inherit) so this can never hang
+    # forever again either way.
+    timeout 600 nsenter -t "$POD_PID" -m -- bash -c "
 source /opt/agh-video-env/bin/activate
 export HF_HOME=${MODELS_DIR}/hf-cache
-CKPT='${CKPT}' OUT_IMG='${OUT}/image.png' python - <<'PY' 2>>${OUT}/image.err
+export PYTHONUNBUFFERED=1
+CKPT='${CKPT}' OUT_IMG='${OUT}/image.png' python -u - >>'${OUT}/image.err' 2>&1 <<'PYEOF'
 import os, torch
 ckpt=os.environ['CKPT']; out=os.environ['OUT_IMG']
 is_xl='xl' in os.path.basename(ckpt).lower()
-if is_xl:
-    from diffusers import StableDiffusionXLPipeline
-    pipe=StableDiffusionXLPipeline.from_single_file(ckpt, torch_dtype=torch.float16).to('cuda')
-    kw=dict(num_inference_steps=25, guidance_scale=7.0, width=1024, height=1024)
-else:
-    from diffusers import StableDiffusionPipeline
-    pipe=StableDiffusionPipeline.from_single_file(ckpt, torch_dtype=torch.float16).to('cuda')
-    kw=dict(num_inference_steps=25, guidance_scale=7.5, width=768, height=512)
-img=pipe(prompt='${PROMPT}', negative_prompt='blurry, ugly, watermark, low quality', **kw).images[0]
+cls_name = 'StableDiffusionXLPipeline' if is_xl else 'StableDiffusionPipeline'
+print('loading', cls_name, 'from', ckpt, flush=True)
+from diffusers import StableDiffusionXLPipeline, StableDiffusionPipeline
+Cls = StableDiffusionXLPipeline if is_xl else StableDiffusionPipeline
+try:
+    os.environ['HF_HUB_OFFLINE'] = '1'
+    pipe = Cls.from_single_file(ckpt, torch_dtype=torch.float16)
+except Exception as e:
+    print('offline load failed (', e, '), retrying online', flush=True)
+    os.environ.pop('HF_HUB_OFFLINE', None)
+    pipe = Cls.from_single_file(ckpt, torch_dtype=torch.float16)
+pipe = pipe.to('cuda')
+print('loaded, generating...', flush=True)
+kw = dict(num_inference_steps=25, guidance_scale=(7.0 if is_xl else 7.5),
+          width=(1024 if is_xl else 768), height=(1024 if is_xl else 512))
+img = pipe(prompt='${PROMPT}', negative_prompt='blurry, ugly, watermark, low quality', **kw).images[0]
 img.save(out)
-print('ok', img.size)
-PY" >/dev/null 2>&1
+print('ok', img.size, flush=True)
+PYEOF
+" || log "  ${RED}✗ timed out after 600s (or nsenter/pod failed) — see ${OUT}/image.err${NC}"
     t1=$(date +%s); wall=$((t1-t0)); peak=$(stop_vram "$vp")
     if [[ -s "${OUT}/image.png" ]]; then
       record image "diffusers/${CKPT_NAME%.safetensors}" "1024x1024, 25 steps" "1024x1024 PNG $(fsize "${OUT}/image.png")" "$wall" "$peak" "$(awk "BEGIN{printf \"%.2f s/img\", $wall}")" ""
     else
-      log "  ${RED}✗ image generation failed (see ${OUT}/image.err)${NC}"
+      log "  ${RED}✗ image generation failed after ${wall}s — see ${OUT}/image.err${NC}"
+      tail -20 "${OUT}/image.err" 2>/dev/null | sed 's/^/    /'
     fi
   else log "  ${YELLOW}○ no checkpoint or diffusers venv (/opt/agh-video-env) missing${NC}"; fi
 fi
