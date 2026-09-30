@@ -65,9 +65,22 @@ echo -e "  Pod PID:    ${POD_PID:-<none — checking on host>}"
 echo -e "${BOLD}════════════════════════════════════════════════════════════════${NC}"
 
 # ── Always installed (every bundle) ───────────────────────────────────────────
+# Detect a LEAN install: no portal and no WhisperX venv means setup ran with LEAN=1,
+# which intentionally skips Blender, WhisperX, the desktop stack and all services.
+# Those must not be reported as failures.
+LEAN_INSTALL=0
+if [[ ! -d /opt/agh-portal && ! -d /opt/whisperx-env ]]; then
+  LEAN_INSTALL=1
+  echo -e "  ${YELLOW}(LEAN install detected — Blender/WhisperX/desktop/services intentionally absent)${NC}"
+fi
+
 echo -e "\n${CYAN}${BOLD}Core (all bundles)${NC}"
 inpod "command -v ffmpeg >/dev/null" && ok "FFmpeg" || bad "FFmpeg"
-inpod "command -v blender >/dev/null" && ok "Blender" || bad "Blender"
+if [[ "$LEAN_INSTALL" == "1" ]]; then
+  inpod "command -v blender >/dev/null" && ok "Blender" || note "Blender — skipped (LEAN mode)"
+else
+  inpod "command -v blender >/dev/null" && ok "Blender" || bad "Blender"
+fi
 check_dir   "ComfyUI"               "/opt/ComfyUI"
 check_dir   "ComfyUI venv"          "/opt/comfyui-env"
 check_import "MusicGen (audiocraft)" "/opt/audio-env" "audiocraft"
@@ -141,7 +154,7 @@ done
 # NOTE: on a LEAN install nothing is served by design (Phase 5 is skipped), so every
 # row below showing "not running" is expected, not a failure.
 echo -e "\n${CYAN}${BOLD}Running services${NC}"
-[[ -d /opt/agh-portal ]] || echo -e "  ${YELLOW}(LEAN install detected — services intentionally not started)${NC}"
+[[ "$LEAN_INSTALL" == "1" ]] && echo -e "  ${YELLOW}(LEAN — services intentionally not started; 'not running' below is expected)${NC}"
 check_port "ComfyUI"           8188
 [[ "$APPS" == *wan21*   ]] && check_port "Wan2.1 Gradio"    7870
 [[ "$APPS" == *hunyuan* || "$APPS" == *ltx* || "$APPS" == *cogvideo* ]] && check_port "AGH Video Studio" 7871
