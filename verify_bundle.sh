@@ -13,7 +13,7 @@
 set -uo pipefail
 
 BUNDLE="${1:-}"
-[[ "$BUNDLE" =~ ^[123]$ ]] || { echo "Usage: sudo bash verify_bundle.sh <1|2|3>"; exit 2; }
+[[ "$BUNDLE" =~ ^[1234]$ ]] || { echo "Usage: sudo bash verify_bundle.sh <1|2|3|4>   (4 = Eval/benchmark bundle)"; exit 2; }
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
@@ -83,11 +83,13 @@ case "$BUNDLE" in
   1) APPS="flux wan21 esrgan" ;;
   2) APPS="flux wan21 hunyuan musicgen bark esrgan" ;;
   3) APPS="flux a1111 hunyuan wan21 ltx cogvideo esrgan musicgen bark devtools" ;;
+  4) APPS="flux hunyuan wan21 ltx cogvideo esrgan bark" ;;   # Eval / benchmarking
 esac
-# Bundle 3 on >=75GB VRAM auto-installs Wan2.2 + Mochi-1 (see setup_creative_suite.sh
-# pick_bundle) — check for them too so verify matches what setup actually installed.
+# Bundles 3 and 4 on >=75GB VRAM auto-install Wan2.2 + Mochi-1 (see
+# setup_creative_suite.sh pick_bundle) — check for them too so verify matches what
+# setup actually installed.
 GPU_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo 0)
-if [[ "$BUNDLE" == "3" && "${GPU_VRAM_MB:-0}" -ge 75000 ]]; then
+if [[ ( "$BUNDLE" == "3" || "$BUNDLE" == "4" ) && "${GPU_VRAM_MB:-0}" -ge 75000 ]]; then
   APPS="${APPS} wan22 mochi"
 fi
 
@@ -136,7 +138,10 @@ for app in $APPS; do
 done
 
 # ── Running services (ports) ──────────────────────────────────────────────────
+# NOTE: on a LEAN install nothing is served by design (Phase 5 is skipped), so every
+# row below showing "not running" is expected, not a failure.
 echo -e "\n${CYAN}${BOLD}Running services${NC}"
+[[ -d /opt/agh-portal ]] || echo -e "  ${YELLOW}(LEAN install detected — services intentionally not started)${NC}"
 check_port "ComfyUI"           8188
 [[ "$APPS" == *wan21*   ]] && check_port "Wan2.1 Gradio"    7870
 [[ "$APPS" == *hunyuan* || "$APPS" == *ltx* || "$APPS" == *cogvideo* ]] && check_port "AGH Video Studio" 7871
